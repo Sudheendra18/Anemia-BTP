@@ -560,8 +560,3 @@ If more than 5–10% of images fall back to center-cropping:
 ### 4. How Does Mixed Precision (AMP) Help?
 On NVIDIA GPUs, setting `training.mixed_precision: true` uses PyTorch `torch.amp.autocast(device_type="cuda")` with `GradScaler`. This computes convolution operations in 16-bit floating point (`fp16`) while maintaining numerical stability in 32-bit float, cutting GPU VRAM consumption by ~50% and doubling batch throughput with no loss in model accuracy.
 
----
-
-## License & Citation
-Developed for the CP-AnemiC Data Pipeline & Benchmarking Project.
-If you use this pipeline or its preprocessing methodologies in your research, please reference this repository.
