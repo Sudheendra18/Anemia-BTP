@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Anemia Data Pipeline & Deep Learning Benchmarking Report</title>
+<style>
+  @page {
+    size: A4;
+    margin: 14mm 15mm 14mm 15mm;
+  }
+
+  *, *:before, *:after {
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #1e293b;
+    line-height: 1.45;
+    font-size: 8.5pt;
+    background: #ffffff;
+    margin: 0;
+    padding: 0;
+  }
+
+  h1, h2, h3, h4 {
+    color: #0f172a;
+    font-weight: 700;
+    margin-top: 0.9em;
+    margin-bottom: 0.3em;
+    page-break-after: avoid;
+  }
+
+  h1 {
+    font-size: 15pt;
+    margin-top: 0;
+  }
+
+  h2 {
+    font-size: 11pt;
+    border-bottom: 1.5px solid #2563eb;
+    padding-bottom: 3px;
+    margin-top: 1.1em;
+    color: #1e40af;
+    page-break-after: avoid;
+  }
+
+  h3 {
+    font-size: 9.5pt;
+    color: #0f172a;
+    margin-top: 0.8em;
+    page-break-after: avoid;
+  }
+
+  h4 {
+    font-size: 8.8pt;
+    color: #334155;
+    margin-top: 0.4em;
+    margin-bottom: 0.2em;
+    page-break-after: avoid;
+  }
+
+  p {
+    margin-top: 0.2em;
+    margin-bottom: 0.4em;
+    text-align: justify;
+  }
+
+  ul, ol {
+    margin-top: 0.2em;
+    margin-bottom: 0.4em;
+    padding-left: 18px;
+  }
+
+  li {
+    margin-bottom: 0.15em;
+  }
+
+  .header-card {
+    background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+    color: #ffffff;
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    page-break-inside: avoid;
+  }
+
+  .header-card h1 {
+    color: #ffffff;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+    padding-bottom: 4px;
+    margin-bottom: 6px;
+    font-size: 14pt;
+  }
+
+  .header-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 8pt;
+    color: #e0e7ff;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 6px 0 10px 0;
+    font-size: 8pt;
+    page-break-inside: avoid;
+  }
+
+  th, td {
+    border: 1px solid #cbd5e1;
+    padding: 4.5px 6px;
+    text-align: left;
+  }
+
+  th {
+    background-color: #f1f5f9;
+    color: #0f172a;
+    font-weight: 700;
+  }
+
+  tr:nth-child(even) {
+    background-color: #f8fafc;
+  }
+
+  .highlight-row {
+    background-color: #eff6ff !important;
+    font-weight: 600;
+  }
+
+  .callout {
+    background-color: #f8fafc;
+    border-left: 3.5px solid #2563eb;
+    padding: 6px 10px;
+    margin: 6px 0 8px 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 8pt;
+    page-break-inside: avoid;
+  }
+
+  .callout-title {
+    font-weight: 700;
+    color: #1e40af;
+    margin-bottom: 2px;
+  }
+
+  .qa-box {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-left: 3.5px solid #059669;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    border-radius: 0 4px 4px 0;
+    page-break-inside: avoid;
+  }
+
+  .qa-question {
+    font-weight: 700;
+    color: #065f46;
+    margin-bottom: 2px;
+    font-size: 8.5pt;
+  }
+
+  .qa-answer {
+    color: #334155;
+    font-size: 8pt;
+  }
+
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 7.8pt;
+    background-color: #f1f5f9;
+    padding: 1px 3px;
+    border-radius: 3px;
+    color: #b91c1c;
+  }
+
+  pre {
+    background-color: #0f172a;
+    color: #f8fafc;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 7.5pt;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    overflow-x: auto;
+    margin: 4px 0 8px 0;
+    page-break-inside: avoid;
+    line-height: 1.35;
+  }
+
+  .formula-box {
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 4px 8px;
+    margin: 4px 0;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 8pt;
+    color: #0f172a;
+    text-align: center;
+    page-break-inside: avoid;
+  }
+
+  .grid-2 {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 6px;
+    page-break-inside: avoid;
+  }
+
+  .grid-col {
+    flex: 1;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    padding: 6px 8px;
+    border-radius: 4px;
+  }
+
+  .stage-block {
+    page-break-inside: avoid;
+    margin-bottom: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div class="header-card">
+  <h1>Non-Invasive Anemia Screening Data Pipeline & CNN Benchmarking Suite</h1>
+  <div class="header-meta">
+    <div><strong>Project Scope:</strong> B.Tech Term Project &mdash; Work Package A (Data Pipeline & Benchmarking)</div>
+    <div><strong>Target Biomarker:</strong> Palpebral Conjunctiva (Eye Mucosa)</div>
+    <div><strong>Primary Dataset:</strong> CP-AnemiC (Ghana) & Clinical Metadata</div>
+    <div><strong>Stack:</strong> PyTorch, OpenCV, Scikit-Learn, Pandas</div>
+  </div>
+</div>
+
+<h2>1. Executive Summary & Clinical Problem Formulation</h2>
+<p>
+  <strong>Anemia</strong> is a major public-health problem in India and developing regions, especially in rural areas where invasive venous blood testing is costly, slow, and constrained by logistical hurdles. This project develops an automated, reproducible deep learning system for <strong>non-invasive anemia screening</strong> using smartphone photographs of the <strong>eye conjunctiva</strong> (the vascularized lower palpebral mucosal membrane). A central challenge is that images are captured across diverse smartphone sensors and uncontrolled lighting conditions.
+</p>
+<p>
+  In direct fulfillment of <strong>Work Package A</strong> specifications, this software provides:
+</p>
+<ul>
+  <li><strong>Dataset Loader & Clinical Audit Engine:</strong> Parses and cross-references CP-AnemiC images against clinical records (hemoglobin levels, age, gender, severity), isolating mismatches in an audit log rather than silently dropping or trusting corrupted samples.</li>
+  <li><strong>Illumination-Robust ROI Extraction:</strong> Multi-color space segmentation (CIELAB, YCrCb, HSV, Norm-RGB) with morphological horizontal crescent bridging, anatomical position scoring, and automatic center-crop safety fallback.</li>
+  <li><strong>Group-Aware K-Fold CNN Training Harness:</strong> Patient-level stratified cross-validation benchmarking transfer learning CNNs (ResNet-50 and EfficientNet-B0) with inverse class weighting, Cosine Annealing, and crash-resilient checkpointing.</li>
+  <li><strong>Clinical Decision Threshold Optimization:</strong> Zero-retraining post-hoc probability calibration across out-of-fold predictions to enforce diagnostic safety constraints (&ge; 90% sensitivity).</li>
+  <li><strong>Multi-Model Benchmarking Suite:</strong> Automated hyperparameter sweeping comparing distinct CNN backbones, learning rates, weight decay, and random erasing regularization.</li>
+</ul>
+
+<h2>2. End-to-End Pipeline Architecture & Workflow</h2>
+<p>
+  The system is managed via a single configuration file (<code>configs/config.yaml</code>), guaranteeing complete parameter traceability and deterministic reproducibility.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width: 15%;">Stage</th>
+      <th style="width: 25%;">Primary Module / Script</th>
+      <th style="width: 35%;">Algorithmic Operations & Methods</th>
+      <th style="width: 25%;">Outputs & Artifacts</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Stage 1: Ingestion & Audit</strong></td>
+      <td><code>src/dataset_loader.py</code><br><code>scripts/run_pipeline.py</code></td>
+      <td>Regex ID normalization, primary key relational join with Excel sheet, folder-vs-clinical label verification.</td>
+      <td><code>cp_anemic_metadata.csv</code><br><code>cp_anemic_issues.csv</code></td>
+    </tr>
+    <tr>
+      <td><strong>Stage 2: Conjunctiva ROI</strong></td>
+      <td><code>src/roi_extraction.py</code><br><code>scripts/test_roi_on_folder.py</code></td>
+      <td>Multi-space chromaticity analysis (Lab, YCrCb, HSV, Norm-RGB), Mucosal Redness Index (MRI), crescent morphology, geometric scoring.</td>
+      <td><code>outputs/roi/ (Crops)</code><br><code>outputs/debug/ (QA)</code><br><code>cp_anemic_metadata_with_roi.csv</code></td>
+    </tr>
+    <tr>
+      <td><strong>Stage 3: CNN Training</strong></td>
+      <td><code>src/train.py</code><br><code>src/dataset.py</code><br><code>src/model.py</code></td>
+      <td>StratifiedGroupKFold on <code>patient_id</code>, inverse class weighting, Cosine Annealing, AMP mixed precision, crash-resilient checkpoints.</td>
+      <td><code>fold_*/best_model.pt</code><br><code>baseline_results_table.csv</code><br>Confusion Matrix / ROC / PR plots</td>
+    </tr>
+    <tr>
+      <td><strong>Stage 4: Threshold Tuning</strong></td>
+      <td><code>src/threshold_analysis.py</code><br><code>scripts/analyze_thresholds.py</code></td>
+      <td>Zero-retraining Out-of-Fold (OOF) inference pooling, threshold sweep (0.05&ndash;0.95), Youden's J & Sensitivity Floor optimization.</td>
+      <td><code>oof_predictions.csv</code><br><code>threshold_sweep.png</code><br><code>confusion_matrix_recommended.png</code></td>
+    </tr>
+    <tr>
+      <td><strong>Stage 5: Experiment Suite</strong></td>
+      <td><code>src/experiment_runner.py</code><br><code>scripts/run_experiments.py</code></td>
+      <td>Systematic architectural comparison (ResNet-50 vs EfficientNet-B0), learning rate & regularization sweeps.</td>
+      <td><code>outputs/experiments/</code><br><code>leaderboard.csv</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>3. Technical Deep-Dive: File-by-File Codebase Walkthrough</h2>
+
+<div class="stage-block">
+  <h3>Stage 1: Clinical Dataset Loader & Integrity Auditing</h3>
+  <p><strong>Source File:</strong> <code>src/dataset_loader.py</code> (Invoked via <code>scripts/run_pipeline.py --stage metadata</code>)</p>
+  <ul>
+    <li><strong>Image Directory Scanning:</strong> Scans <code>Anemic</code> and <code>Non-anemic</code> directories for valid image formats (<code>.jpg</code>, <code>.png</code>, <code>.jpeg</code>, <code>.bmp</code>).</li>
+    <li><strong>Fuzzy ID Normalization:</strong> Function <code>_normalize_id()</code> strips punctuation, whitespace, and casing using regex (<code>re.sub(r"[^a-z0-9]", "", raw.lower())</code>) so variations like <code>Image_001.jpg</code>, <code>image001.png</code>, and <code>IMAGE-001.jpeg</code> map to the same key <code>image001</code>.</li>
+    <li><strong>Relational Joining with Clinical Metadata:</strong> Matches normalized IDs against <code>Anemia_Data_Collection_Sheet.xlsx</code>, parsing quantitative hemoglobin (<code>HB_LEVEL</code> in g/dL), severity (<code>Mild</code>, <code>Moderate</code>, <code>Severe</code>), patient age, gender, hospital, and geographic region.</li>
+    <li><strong>Audit Quarantining:</strong> Compares on-disk folder labels against the clinical <code>REMARK</code> column. Confirmed entries export to <code>cp_anemic_metadata.csv</code>. Any anomalies (label disagreements, missing files, or unindexed rows) are isolated in <code>cp_anemic_issues.csv</code> with explicit diagnostic tags.</li>
+  </ul>
+</div>
+
+<div class="stage-block">
+  <h3>Stage 2: Illumination-Robust Conjunctiva ROI Extraction</h3>
+  <p><strong>Source File:</strong> <code>src/roi_extraction.py</code> (Invoked via <code>scripts/run_pipeline.py --stage roi</code>)</p>
+  <p>
+    Palpebral conjunctiva tissue is characterized by microvascular perfusion that produces localized erythema. To segment this tissue robustly across varying lighting and skin tones, the module uses a 5-step computer vision algorithm:
+  </p>
+  <ol>
+    <li><strong>Multi-Space Color Transformations:</strong>
+      CIELAB (<em>L</em><sup>*</sup>, <em>a</em><sup>*</sup>, <em>b</em><sup>*</sup>) isolates vascular redness (<em>a</em><sup>*</sup>) and subtracts yellowness (<em>b</em><sup>*</sup>); YCrCb isolates red chroma (<em>Cr</em>) independent of luminance; Normalized Excess Red computes (<em>R</em> &minus; <em>G</em>) / (<em>R</em> + <em>G</em> + <em>B</em> + &epsilon;); HSV isolates red hue angles (<em>H</em> &le; 26&deg; &cup; <em>H</em> &ge; 152&deg;, <em>S</em> &ge; 28).
+    </li>
+    <li><strong>Composite Mucosal Redness Index (MRI):</strong> Formulates a continuous redness metric reinforcing mucosal tissue:
+      <div class="formula-box">
+        MRI = (a* &minus; 128) + (Cr &minus; 128) + 80 &middot; (r<sub>norm</sub> &minus; g<sub>norm</sub>) + 0.15 &middot; S &minus; 0.25 &middot; (b* &minus; 128)
+      </div>
+    </li>
+    <li><strong>Eye-Zone Adaptive Thresholding:</strong> Rejects flash glare (<em>V</em> &gt; 245, <em>S</em> &lt; 35) and dark shadows (<em>V</em> &lt; 40). Computes 95th and 68th percentiles of MRI in the ocular window to dynamically set a cutoff.</li>
+    <li><strong>Horizontal Crescent Morphological Bridging:</strong> Applies an elliptical structuring element (<em>k</em><sub>w</sub> &approx; 4.5% width, <em>k</em><sub>h</sub> &approx; 1.5% height) via morphological closing to bridge palpebral vascular arches.</li>
+    <li><strong>Connected Component Anatomical Scoring:</strong> Evaluates detected blobs using an anatomical fitness function:
+      <div class="formula-box">
+        Score = Area &middot; PositionWeight(y<sub>rel</sub>) &middot; AspectWeight(w/h) &middot; (Mean_MRI)<sup>1.3</sup>
+      </div>
+    </li>
+    <li><strong>Safety Bounding Box & Fallback Crop:</strong> Adds safety padding (8% vertical, 4% horizontal). If segmentation fails, automatically defaults to a central 60% window (<code>status: "fallback"</code>). Multiprocessing with <code>ProcessPoolExecutor</code> accelerates batch execution.</li>
+  </ol>
+</div>
+
+<div class="stage-block">
+  <h3>Stage 3: PyTorch Dataset & Clinical Augmentation</h3>
+  <p><strong>Source File:</strong> <code>src/dataset.py</code></p>
+  <ul>
+    <li><strong><code>ConjunctivaDataset</code>:</strong> Lazy-loads images via OpenCV, handles color conversions, applies transforms, and maps labels (<code>0: Non-anemic</code>, <code>1: Anemic</code>).</li>
+    <li><strong>Domain-Appropriate Augmentation:</strong> Applies horizontal flipping (<em>p</em> = 0.5), mild rotation (&plusmn;15&deg; to &plusmn;20&deg;), and color jitter (brightness, contrast, saturation).</li>
+    <li><strong>Preservation of Anatomical Priors:</strong> <em>No vertical flips are permitted</em> because ocular images possess strict vertical orientation (sclera above, lower eyelid below).</li>
+    <li><strong>Random Erasing Regularization:</strong> Optionally masks a random rectangular sub-patch (2%&ndash;15% area) with probability <em>p</em> = 0.25, forcing the network to evaluate broader mucosal tissue rather than overfitting to single vascular clusters.</li>
+  </ul>
+</div>
+
+<div class="stage-block">
+  <h3>Stage 4: CNN Architecture Factory</h3>
+  <p><strong>Source File:</strong> <code>src/model.py</code></p>
+  <ul>
+    <li><code>build_model()</code> instantiates standard convolutional architectures with ImageNet-pretrained weights and adapts their final classification heads:
+      <ul>
+        <li><strong>ResNet-50:</strong> Loads <code>ResNet50_Weights.IMAGENET1K_V2</code> and replaces the final layer: <code>model.fc = nn.Linear(2048, 2)</code>.</li>
+        <li><strong>EfficientNet-B0:</strong> Loads <code>EfficientNet_B0_Weights.IMAGENET1K_V1</code> and replaces the classifier: <code>model.classifier[1] = nn.Linear(1280, 2)</code>.</li>
+      </ul>
+    </li>
+    <li><strong>Backbone Freezing:</strong> Supports <code>freeze_backbone=True</code> (feature extraction where only the head receives gradients) or <code>freeze_backbone=False</code> (end-to-end full fine-tuning).</li>
+    <li><code>count_trainable_params()</code> audits model parameter allocation prior to training.</li>
+  </ul>
+</div>
+
+<div class="stage-block">
+  <h3>Stage 5: Cross-Validation Training & Crash-Recovery Harness</h3>
+  <p><strong>Source File:</strong> <code>src/train.py</code> (Invoked via <code>scripts/train_baseline.py</code>)</p>
+  <ul>
+    <li><strong>Patient-Level Stratified K-Fold:</strong> Uses <code>StratifiedGroupKFold(n_splits=5)</code> grouped on <code>patient_id</code>. Guarantees that all images from the same subject remain strictly within either training or validation, preventing data leakage. An explicit runtime assertion (<code>assert not overlap</code>) verifies split purity.</li>
+    <li><strong>Class Imbalance Reweighting:</strong> Addresses the 424 : 286 (60% : 40%) anemic to non-anemic class ratio by computing inverse class frequencies: <em>w</em><sub>c</sub> = <em>N</em> / (<em>C</em> &middot; <em>N</em><sub>c</sub>) and injecting them into <code>nn.CrossEntropyLoss(weight=class_weights)</code>.</li>
+    <li><strong>Mixed Precision Acceleration:</strong> Enables CUDA Automatic Mixed Precision (AMP via <code>torch.amp.autocast</code> and <code>GradScaler</code>), halving memory consumption and accelerating training.</li>
+    <li><strong>Learning Rate Scheduling:</strong> Supports <strong>Cosine Annealing (<code>CosineAnnealingLR</code>)</strong> for smooth learning rate decay, or <strong>ReduceLROnPlateau</strong>.</li>
+    <li><strong>Early Stopping on <em>F</em><sub>2</sub> Metric:</strong> Monitors validation <em>F</em><sub>2</sub> score each epoch with patience (10 epochs), immediately saving <code>best_model.pt</code> whenever a new peak is achieved.</li>
+    <li><strong>Crash-Resilient State Checkpointing:</strong> Saves <code>resume_state.pt</code> every epoch (model weights, optimizer, scaler, scheduler, history, patience counters). If interrupted, re-running skips completed folds and resumes unfinished folds from the exact interrupted epoch.</li>
+  </ul>
+</div>
+
+<div class="stage-block">
+  <h3>Stage 6: Statistical Metrics & Publication Figures</h3>
+  <p><strong>Source File:</strong> <code>src/metrics.py</code></p>
+  <ul>
+    <li>Computes <strong>Accuracy, Sensitivity (Recall on Anemic), Specificity, <em>F</em><sub>1</sub>, <em>F</em><sub>2</sub>, and ROC AUC</strong>.</li>
+    <li>Generates high-resolution (300 DPI) publication-ready plots: <code>confusion_matrix.png</code>, <code>roc_curve.png</code>, <code>pr_curve.png</code>, and <code>training_history.png</code>.</li>
+    <li>Aggregates fold metrics into <code>baseline_results_table.csv</code> with mean and standard deviation rows.</li>
+  </ul>
+</div>
+
+<div class="stage-block">
+  <h3>Stage 7: Post-Hoc Clinical Decision Threshold Analysis</h3>
+  <p><strong>Source File:</strong> <code>src/threshold_analysis.py</code> (Invoked via <code>scripts/analyze_thresholds.py</code>)</p>
+  <ul>
+    <li><strong>Zero-Retraining OOF Inference:</strong> Loads trained fold checkpoints (<code>best_model.pt</code>), evaluates held-out validation images, and pools predictions into a single Out-of-Fold (OOF) dataset (<code>oof_predictions.csv</code>).</li>
+    <li><strong>Threshold Sweeping:</strong> Evaluates candidate cutoffs &tau; &isin; [0.05, 0.95] in increments of 0.01.</li>
+    <li><strong>Three Clinical Recommendations:</strong> (1) <code>max_f2</code>: Maximizes <em>F</em><sub>2</sub> score directly; (2) <code>max_youden_j</code>: Maximizes Youden's Index (<em>J</em> = Sensitivity + Specificity &minus; 1); (3) <code>max_specificity_at_sensitivity_floor</code>: Enforces Sensitivity &ge; 90% and maximizes specificity.</li>
+    <li>Outputs <code>threshold_sweep.png</code> and <code>confusion_matrix_recommended_threshold.png</code>.</li>
+  </ul>
+</div>
+
+<div class="stage-block">
+  <h3>Stage 8: Multi-Model Experimentation & Benchmark Suite</h3>
+  <p><strong>Source File:</strong> <code>src/experiment_runner.py</code> (Invoked via <code>scripts/run_experiments.py</code>)</p>
+  <ul>
+    <li>Automates sequential benchmarking across all model architectures and hyperparameter overrides defined in <code>config.yaml</code>.</li>
+    <li>Isolates outputs per experiment (<code>outputs/experiments/&lt;run_name&gt;/</code>) and exports a ranked comparative <code>leaderboard.csv</code>.</li>
+  </ul>
+</div>
+
+<h2>4. CNN Architectures & Experimental Variations Breakdown</h2>
+
+<div class="grid-2">
+  <div class="grid-col">
+    <h4>ResNet-50 Architecture</h4>
+    <ul>
+      <li><strong>Total Parameters:</strong> ~25.6 Million</li>
+      <li><strong>Building Blocks:</strong> 3-layer Bottleneck Residual Units (1&times;1 &rarr; 3&times;3 &rarr; 1&times;1).</li>
+      <li><strong>Mechanism:</strong> Identity shortcut connections eliminate vanishing gradients in deep networks.</li>
+      <li><strong>Clinical Role:</strong> High-capacity baseline capable of modeling subtle vascular features.</li>
+    </ul>
+  </div>
+  <div class="grid-col">
+    <h4>EfficientNet-B0 Architecture</h4>
+    <ul>
+      <li><strong>Total Parameters:</strong> ~5.3 Million (5x lighter than ResNet-50)</li>
+      <li><strong>Building Blocks:</strong> MBConv (Inverted Residuals) + Squeeze-and-Excitation (SE).</li>
+      <li><strong>Mechanism:</strong> Compound scaling balances depth, width, and resolution; SE provides channel attention.</li>
+      <li><strong>Clinical Role:</strong> Parameter-efficient architecture that resists overfitting on compact datasets.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>The 6 Experimental Variations Evaluated</h3>
+<ol>
+  <li><code>resnet50_lr1e-4</code>: ResNet-50 baseline with Adam optimizer, LR = 1&times;10<sup>&minus;4</sup>, Cosine Annealing, and standard data augmentation.</li>
+  <li><code>resnet50_lr3e-5</code>: ResNet-50 with conservative learning rate (LR = 3&times;10<sup>&minus;5</sup>) to evaluate weight preservation.</li>
+  <li><code>efficientnet_b0_lr1e-4</code>: EfficientNet-B0 baseline with LR = 1&times;10<sup>&minus;4</sup> and Cosine Annealing.</li>
+  <li><code>efficientnet_b0_lr3e-4</code>: EfficientNet-B0 with elevated learning rate (LR = 3&times;10<sup>&minus;4</sup>) to test convergence speed.</li>
+  <li><code>efficientnet_b0_lr1e-4_wd5e-4</code>: EfficientNet-B0 with 5&times; increased L2 weight decay (5&times;10<sup>&minus;4</sup>) to penalize large weights.</li>
+  <li><code>efficientnet_b0_lr1e-4_wd5e-4_aug</code>: EfficientNet-B0 combining weight decay (5&times;10<sup>&minus;4</sup>), enhanced rotation (&plusmn;20&deg;), color jitter (0.3), and <strong>Random Erasing</strong> (<em>p</em> = 0.25).</li>
+</ol>
+
+<h3>Empirical Benchmark Results (5-Fold Stratified Group Cross-Validation)</h3>
+<p>The table below presents the official benchmark results aggregated across all 5 cross-validation folds from <code>outputs/experiments/leaderboard.csv</code>:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Experiment Configuration</th>
+      <th>Mean Accuracy</th>
+      <th>Mean Sensitivity</th>
+      <th>Mean Specificity</th>
+      <th>Mean F1</th>
+      <th>Mean F2</th>
+      <th>Mean ROC AUC</th>
+      <th>Key Empirical Observations</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="highlight-row">
+      <td><strong><code>resnet50_lr1e-4</code></strong></td>
+      <td>84.23% &plusmn; 3.1%</td>
+      <td><strong>91.90% &plusmn; 4.4%</strong></td>
+      <td>72.68% &plusmn; 5.5%</td>
+      <td>0.8742</td>
+      <td><strong>0.9003 &plusmn; 0.033</strong></td>
+      <td>0.9209 &plusmn; 0.023</td>
+      <td><strong>Highest F2 Score (0.9003)</strong> and top recall (91.9%). Strongest pure screening baseline.</td>
+    </tr>
+    <tr class="highlight-row">
+      <td><strong><code>efficientnet_b0_lr1e-4_wd5e-4_aug</code></strong></td>
+      <td><strong>86.06% &plusmn; 3.6%</strong></td>
+      <td>90.39% &plusmn; 6.4%</td>
+      <td>80.71% &plusmn; 7.6%</td>
+      <td>0.8845</td>
+      <td>0.8954 &plusmn; 0.047</td>
+      <td>0.9207 &plusmn; 0.022</td>
+      <td><strong>Best Clinical Balance:</strong> Exceeds 90% sensitivity while elevating specificity to 80.7%.</td>
+    </tr>
+    <tr class="highlight-row">
+      <td><strong><code>efficientnet_b0_lr1e-4</code></strong></td>
+      <td><strong>86.62% &plusmn; 2.4%</strong></td>
+      <td>88.49% &plusmn; 3.4%</td>
+      <td><strong>84.25% &plusmn; 5.4%</strong></td>
+      <td><strong>0.8866</strong></td>
+      <td>0.8854 &plusmn; 0.027</td>
+      <td><strong>0.9277 &plusmn; 0.021</strong></td>
+      <td><strong>Highest ROC AUC (0.928)</strong> and lowest fold variance (&plusmn;2.4%), proving superior generalizability.</td>
+    </tr>
+    <tr>
+      <td><code>efficientnet_b0_lr3e-4</code></td>
+      <td>81.55% &plusmn; 9.2%</td>
+      <td>92.02% &plusmn; 5.6%</td>
+      <td>65.86% &plusmn; 18.2%</td>
+      <td>0.8565</td>
+      <td>0.8933 &plusmn; 0.059</td>
+      <td>0.8644 &plusmn; 0.105</td>
+      <td>High sensitivity but unstable fold variance (&plusmn;18% specificity) due to high learning rate.</td>
+    </tr>
+    <tr>
+      <td><code>resnet50_lr3e-5</code></td>
+      <td>81.69% &plusmn; 2.8%</td>
+      <td>89.17% &plusmn; 5.0%</td>
+      <td>71.30% &plusmn; 5.2%</td>
+      <td>0.8525</td>
+      <td>0.8751 &plusmn; 0.034</td>
+      <td>0.8872 &plusmn; 0.020</td>
+      <td>Underperformed 1e-4; learning rate was too small for optimal convergence.</td>
+    </tr>
+    <tr>
+      <td><code>efficientnet_b0_lr1e-4_wd5e-4</code></td>
+      <td>84.51% &plusmn; 4.8%</td>
+      <td>87.51% &plusmn; 4.7%</td>
+      <td>79.43% &plusmn; 8.5%</td>
+      <td>0.8708</td>
+      <td>0.8733 &plusmn; 0.042</td>
+      <td>0.8988 &plusmn; 0.071</td>
+      <td>Solid balance; outperformed when enhanced augmentations were combined.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>5. Professor Oral Examination & Defense Q&A Guide</h2>
+
+<div class="qa-box">
+  <div class="qa-question">Q1: Why did you designate the F2 score as the primary optimization metric rather than Accuracy or F1?</div>
+  <div class="qa-answer">
+    <strong>Answer:</strong> In non-invasive medical screening, clinical error costs are fundamentally asymmetric. A <strong>False Negative</strong> (failing to identify an anemic patient) leaves a patient untreated, whereas a <strong>False Positive</strong> merely results in a confirmatory venous blood test. The <em>F</em><sub>&beta;</sub> metric with &beta; = 2 weights Recall (Sensitivity) twice as heavily as Precision. This ensures that early stopping and checkpoint selection actively penalize missed anemic cases.
+  </div>
+</div>
+
+<div class="qa-box">
+  <div class="qa-question">Q2: Why was StratifiedGroupKFold on patient_id required instead of standard StratifiedKFold?</div>
+  <div class="qa-answer">
+    <strong>Answer:</strong> If multiple images exist for the same subject, standard random splitting can place Image A of Patient #1 in the training set and Image B of Patient #1 in the validation set. The neural network would memorize patient-specific skin tone, lighting, and ocular geometry (data leakage) rather than generalizable anemia markers. Group K-Fold strictly guarantees that all images of any subject remain isolated within a single split.
+  </div>
+</div>
+
+<div class="qa-box">
+  <div class="qa-question">Q3: Why develop a Multi-Space Chromaticity algorithm for ROI extraction instead of simple RGB or HSV thresholding?</div>
+  <div class="qa-answer">
+    <strong>Answer:</strong> Palpebral conjunctiva tissue and periocular eyelid skin share overlapping RGB and Hue distributions. Our <strong>Composite Mucosal Redness Index (MRI)</strong> combines CIELAB <em>a</em><sup>*</sup> (perfusion erythema), YCrCb <em>Cr</em> (red chroma), and normalized <em>R</em>&minus;<em>G</em>, while actively subtracting <em>b</em><sup>*</sup> (epidermal yellowness). Combined with horizontal crescent morphological closing and spatial position scoring, this isolates vascularized conjunctiva tissue regardless of skin tone or flash lighting.
+  </div>
+</div>
+
+<div class="qa-box">
+  <div class="qa-question">Q4: What is the technical distinction between Loss Reweighting and Decision Threshold Tuning?</div>
+  <div class="qa-answer">
+    <strong>Answer:</strong> They operate on two completely different stages of the learning process:
+    <ol>
+      <li><strong>Loss Reweighting (<code>use_class_weights</code>):</strong> Modifies the gradient loss surface during backpropagation, forcing the network to penalize minority class errors during training.</li>
+      <li><strong>Threshold Tuning (<code>analyze_thresholds.py</code>):</strong> Adjusts the post-hoc decision cutoff &tau; on out-of-fold probability outputs without retraining, allowing us to enforce clinical safety floors (e.g., Sensitivity &ge; 90%) or maximize Youden's <em>J</em>-statistic.</li>
+    </ol>
+  </div>
+</div>
+
+<h2>6. Command-Line Reproduction Guide</h2>
+<pre><code># 1. Execute Data Ingestion (Stage 1) & Conjunctiva ROI Extraction (Stage 2)
+python scripts/run_pipeline.py
+
+# 2. Execute Baseline 5-Fold Cross-Validation Training
+python scripts/train_baseline.py
+
+# 3. Perform Post-Hoc Decision Threshold Analysis on Out-of-Fold Probabilities
+python scripts/analyze_thresholds.py --sensitivity-floor 0.90
+
+# 4. Run the Full Multi-Model Benchmark Suite (Generates leaderboard.csv)
+python scripts/run_experiments.py
+
+# 5. Test ROI Extraction on any Arbitrary External Folder of Uncropped Photos
+python scripts/test_roi_on_folder.py --input path/to/images --output outputs/roi_test
+</code></pre>
+
+<div class="callout">
+  <div class="callout-title">Summary & Next Research Steps</div>
+  This pipeline delivers the full software deliverables specified in Work Package A. The modular design enables direct extension to external cross-dataset generalization testing (e.g., Indian clinical cohorts) and seamless integration with the Work Package B smartphone image capture application.
+</div>
+
+</body>
+</html>

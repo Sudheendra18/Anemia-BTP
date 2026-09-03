@@ -1,0 +1,31 @@
+# Raw data (large, and typically not meant for version control)
+data/raw/Anemic/*
+data/raw/Non-anemic/*
+!data/raw/Anemic/.gitkeep
+!data/raw/Non-anemic/.gitkeep
+
+# Generated outputs
+outputs/metadata/*
+outputs/roi/*
+outputs/logs/*
+outputs/debug/*
+!outputs/metadata/.gitkeep
+!outputs/roi/.gitkeep
+!outputs/logs/.gitkeep
+!outputs/debug/.gitkeep
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Model weights and checkpoints (large binary files)
+*.pt
+*.pth
+*.onnx
+*.bin
+*.h5
+*.pkl
+checkpoints/
+

@@ -1,0 +1,129 @@
+dataset:
+  name: CP-AnemiC
+  raw_images_dir: data/raw
+  class_folders:
+    anemic: Anemic
+    non_anemic: Non-anemic
+  image_extensions:
+  - .jpg
+  - .jpeg
+  - .png
+  - .bmp
+  metadata_excel_path: data/Anemia_Data_Collection_Sheet.xlsx
+  metadata_sheet_name: Anemia_Data_Collection_Sheet
+  excel_columns:
+    image_id: IMAGE_ID
+    hb_level: HB_LEVEL
+    severity: Severity
+    age_months: Age(Months)
+    gender: GENDER
+    remark: REMARK
+    hospital: HOSPITAL
+    city_town: CITY/TOWN
+    district: MUNICIPALITY/DISTRICT
+    region: REGION
+    country: COUNTRY
+  label_map:
+    Non-anemic: 0
+    Anemic: 1
+metadata_builder:
+  output_csv: outputs/metadata/cp_anemic_metadata.csv
+  issues_csv: outputs/metadata/cp_anemic_issues.csv
+  drop_conflicts: false
+roi_extraction:
+  output_dir: outputs/roi
+  output_csv: outputs/metadata/cp_anemic_metadata_with_roi.csv
+  debug_dir: outputs/debug
+  debug_sample_size: 20
+  resize_long_side: 800
+  bbox_padding_frac: 0.08
+  hsv_lower:
+  - 0
+  - 30
+  - 60
+  hsv_upper:
+  - 25
+  - 255
+  - 255
+  hsv_lower_wrap:
+  - 160
+  - 30
+  - 60
+  hsv_upper_wrap:
+  - 180
+  - 255
+  - 255
+  morph_kernel_size: 7
+  min_contour_area_frac: 0.03
+  fallback_center_crop_frac: 0.6
+training:
+  image_source: with_roi
+  architecture: resnet50
+  pretrained: true
+  freeze_backbone: false
+  num_classes: 2
+  image_size: 224
+  batch_size: 8
+  num_epochs: 40
+  learning_rate: 0.0001
+  weight_decay: 0.0005
+  optimizer: adam
+  lr_scheduler: cosine
+  use_class_weights: true
+  augmentation:
+    horizontal_flip_prob: 0.5
+    rotation_degrees: 25
+    color_jitter:
+      brightness: 0.3
+      contrast: 0.3
+      saturation: 0.3
+    translate: 0.08
+    shear: 8
+  num_workers: 0
+  early_stopping_patience: 10
+  mixed_precision: true
+  k_folds: 5
+  primary_metric: f2
+  output_dir: outputs\experiments\resnet50_lr1e-4_regularized
+x-regularization-presets:
+  strong_augmentation: &id001
+    horizontal_flip_prob: 0.5
+    rotation_degrees: 25
+    color_jitter:
+      brightness: 0.3
+      contrast: 0.3
+      saturation: 0.3
+    translate: 0.08
+    shear: 8
+experiments:
+  output_dir: outputs/experiments
+  runs:
+  - name: resnet50_lr1e-4
+    overrides:
+      architecture: resnet50
+      learning_rate: 0.0001
+  - name: resnet50_lr3e-5
+    overrides:
+      architecture: resnet50
+      learning_rate: 3.0e-05
+  - name: efficientnet_b0_lr1e-4
+    overrides:
+      architecture: efficientnet_b0
+      learning_rate: 0.0001
+  - name: efficientnet_b0_lr3e-4
+    overrides:
+      architecture: efficientnet_b0
+      learning_rate: 0.0003
+  - name: resnet50_lr1e-4_regularized
+    overrides:
+      architecture: resnet50
+      learning_rate: 0.0001
+      weight_decay: 0.0005
+      augmentation: *id001
+  - name: efficientnet_b0_lr1e-4_regularized
+    overrides:
+      architecture: efficientnet_b0
+      learning_rate: 0.0001
+      weight_decay: 0.0005
+      augmentation: *id001
+random_seed: 42

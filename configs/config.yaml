@@ -1,0 +1,217 @@
+# ==============================================================================
+# CP-AnemiC Data Pipeline — Configuration
+# Work Package A: Data Pipeline and Benchmarking
+#
+# Every script reads this file. Nothing should be hard-coded elsewhere.
+# ==============================================================================
+
+dataset:
+  name: "CP-AnemiC"
+
+  # Root folder that contains the two class sub-folders.
+  # Point this at wherever your images actually live — it does not have to be
+  # inside this repo. The two sub-folder names below must match your on-disk
+  # folder names exactly (case-sensitive on Linux/Mac).
+  raw_images_dir: "data/raw"
+  class_folders:
+    anemic: "Anemic"
+    non_anemic: "Non-anemic"
+
+  # Accepted image extensions (case-insensitive) when scanning the folders.
+  image_extensions: [".jpg", ".jpeg", ".png", ".bmp"]
+
+  # The Excel sheet with per-image clinical metadata.
+  metadata_excel_path: "data/Anemia_Data_Collection_Sheet.xlsx"
+  metadata_sheet_name: "Anemia_Data_Collection_Sheet"
+
+  # Column names as they appear in the Excel sheet (edit here if the sheet
+  # is ever re-exported with different headers — nothing else needs to change).
+  excel_columns:
+    image_id: "IMAGE_ID"
+    hb_level: "HB_LEVEL"
+    severity: "Severity"
+    age_months: "Age(Months)"
+    gender: "GENDER"
+    remark: "REMARK"          # "Anemic" / "Non-anemic" — should match folder label
+    hospital: "HOSPITAL"
+    city_town: "CITY/TOWN"
+    district: "MUNICIPALITY/DISTRICT"
+    region: "REGION"
+    country: "COUNTRY"
+
+  # Label encoding used everywhere downstream (label column in metadata.csv).
+  label_map:
+    "Non-anemic": 0
+    "Anemic": 1
+
+# ------------------------------------------------------------------------------
+# Stage 1: metadata builder output
+# ------------------------------------------------------------------------------
+metadata_builder:
+  output_csv: "outputs/metadata/cp_anemic_metadata.csv"
+  # Rows where folder label and Excel REMARK disagree, or where an image has
+  # no matching Excel row, are written here for manual review instead of
+  # silently dropped or silently trusted.
+  issues_csv: "outputs/metadata/cp_anemic_issues.csv"
+  # If True, rows with an unresolved label conflict are excluded from the
+  # main metadata CSV (they still appear in issues_csv). If False, they're
+  # kept in the main CSV with the folder label and flagged.
+  drop_conflicts: false
+
+# ------------------------------------------------------------------------------
+# Stage 2: ROI (conjunctiva region) extraction
+# ------------------------------------------------------------------------------
+roi_extraction:
+  output_dir: "outputs/roi"
+  output_csv: "outputs/metadata/cp_anemic_metadata_with_roi.csv"
+  # Where a few random before/after debug composites get saved for manual QA.
+  debug_dir: "outputs/debug"
+  debug_sample_size: 20
+
+  # Resize the longer side to this many pixels before processing (speed +
+  # consistency). Set to null to disable.
+  resize_long_side: 800
+
+  # Padding added around the detected conjunctiva bounding box before
+  # cropping, as a fraction of the box's own width/height.
+  bbox_padding_frac: 0.08
+
+  # HSV thresholds used to segment moist reddish/pink mucosal tissue from
+  # surrounding skin, eyelashes and glare. These are reasonable starting
+  # defaults for close-up pulled-down-eyelid photos — expect to retune them
+  # against a sample of your real images (see docs/ROI_TUNING.md).
+  hsv_lower: [0, 30, 60]
+  hsv_upper: [25, 255, 255]
+  hsv_lower_wrap: [160, 30, 60]   # red wraps around hue 0/180 in OpenCV's H range
+  hsv_upper_wrap: [180, 255, 255]
+
+  # Morphology kernel size used to clean up the color mask.
+  morph_kernel_size: 7
+
+  # Minimum contour area (as a fraction of image area) to be considered a
+  # valid conjunctiva region. Smaller specks (glare, eyelashes) are rejected.
+  min_contour_area_frac: 0.03
+
+  # If segmentation fails to find a valid region, fall back to a center crop
+  # of this fraction of the image instead of failing the whole image.
+  fallback_center_crop_frac: 0.6
+
+# ------------------------------------------------------------------------------
+# Stage 3: baseline model training / evaluation harness
+# ------------------------------------------------------------------------------
+training:
+  # Which metadata CSV to train from. "with_roi" uses the ROI-cropped images
+  # (roi_extraction.output_csv); "raw" uses the plain metadata CSV and trains
+  # on full images instead. Switch this without touching any code once you've
+  # visually confirmed which crop quality you trust.
+  image_source: "with_roi"          # "with_roi" | "raw"
+
+  architecture: "resnet50"          # "resnet50" | "efficientnet_b0"
+  pretrained: true
+  # Freeze the backbone and only train the new classification head. Good for
+  # a fast first baseline on a small dataset; set false for full fine-tuning.
+  freeze_backbone: false
+
+  num_classes: 2
+  image_size: 224
+  batch_size: 8
+  num_epochs: 40
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  optimizer: "adam"                 # "adam" | "sgd"
+
+  # Learning rate schedule. "cosine" smoothly decays LR to ~0 over
+  # num_epochs — usually a straightforward win over a flat LR when you can
+  # afford the extra epochs. "plateau" instead halves LR whenever
+  # primary_metric stalls for 3 epochs. "none" keeps LR flat (the original
+  # behavior).
+  lr_scheduler: "cosine"            # "none" | "cosine" | "plateau"
+
+  # Class imbalance handling (710 images: 424 Anemic / 286 Non-anemic).
+  # Applies inverse-frequency weights to the loss function.
+  use_class_weights: true
+
+  # Train-time augmentation strength. Defaults match what every experiment
+  # so far has used. random_erasing_prob is 0 (off) by default — it's an
+  # extra regularizer worth turning on specifically if you're seeing the
+  # train/val loss gap warning consistently (see docs/TRAINING.md).
+  augmentation:
+    rotation_degrees: 15
+    color_jitter: 0.2
+    random_erasing_prob: 0.0
+
+  num_workers: 0
+  early_stopping_patience: 10       # epochs with no val-metric improvement before stopping a fold
+
+  # Automatic mixed precision (fp16/bf16 compute where safe). Only takes
+  # effect on a CUDA GPU — ignored on CPU/MPS. Roughly halves memory use and
+  # speeds up training on most NVIDIA GPUs with no accuracy cost worth
+  # worrying about at this scale. Turn off only if you hit NaN losses.
+  mixed_precision: true
+
+  # Cross-validation. Splitting uses StratifiedGroupKFold on `patient_id` as
+  # the group and `label` as the stratification target — this guarantees no
+  # patient's images appear in both train and val, and works correctly
+  # whether patient_id turns out to be 1:1 with image_id or not (see
+  # docs/DATA_CONTRACT.md).
+  k_folds: 5
+
+  # Metric used for early stopping and for picking the best checkpoint per
+  # fold. F2 weights recall (sensitivity) higher than precision, which fits
+  # a screening tool where a missed anemic case is worse than a false alarm.
+  primary_metric: "f2"              # "f2" | "f1" | "auc" | "accuracy" | "sensitivity"
+
+  output_dir: "outputs/training"
+
+# ------------------------------------------------------------------------------
+# Experiment comparison (optional) — runs several training configurations
+# back to back and ranks them. Each entry overrides specific `training:`
+# keys; everything not listed is inherited from `training:` above. Use this
+# when you have the time budget to let a real comparison run rather than
+# guessing at one architecture/learning-rate combination.
+#
+#   python scripts/run_experiments.py
+#
+# See docs/TRAINING.md for how to read the resulting leaderboard.
+# ------------------------------------------------------------------------------
+experiments:
+  output_dir: "outputs/experiments"
+  runs:
+    - name: "resnet50_lr1e-4"
+      overrides:
+        architecture: "resnet50"
+        learning_rate: 0.0001
+    - name: "resnet50_lr3e-5"
+      overrides:
+        architecture: "resnet50"
+        learning_rate: 0.00003
+    - name: "efficientnet_b0_lr1e-4"
+      overrides:
+        architecture: "efficientnet_b0"
+        learning_rate: 0.0001
+    - name: "efficientnet_b0_lr3e-4"
+      overrides:
+        architecture: "efficientnet_b0"
+        learning_rate: 0.0003
+    # Follow-up pair, added after the first 4 experiments all showed a
+    # consistent train/val loss gap (the "some overfitting" warning) across
+    # nearly every fold — targeting the strongest all-round result so far
+    # (efficientnet_b0_lr1e-4: best accuracy, best AUC, best specificity,
+    # lowest variance) with stronger regularization to see if that gap can
+    # be closed without giving up what made it the best-balanced result.
+    - name: "efficientnet_b0_lr1e-4_wd5e-4"
+      overrides:
+        architecture: "efficientnet_b0"
+        learning_rate: 0.0001
+        weight_decay: 0.0005
+    - name: "efficientnet_b0_lr1e-4_wd5e-4_aug"
+      overrides:
+        architecture: "efficientnet_b0"
+        learning_rate: 0.0001
+        weight_decay: 0.0005
+        augmentation:
+          rotation_degrees: 20
+          color_jitter: 0.3
+          random_erasing_prob: 0.25
+
+random_seed: 42
