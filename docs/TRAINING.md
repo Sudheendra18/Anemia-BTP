@@ -313,13 +313,60 @@ inference/deployment code later, route the prediction through
 `metrics.apply_threshold(y_prob, threshold)` instead of `argmax` — that's
 the one place in the codebase that should encode what the decision rule is.
 
+## Data Augmentation Ablation Study
+
+To evaluate how much training-time data augmentations (horizontal flipping,
+rotation, color jitter for saturation/contrast/brightness, random erasing)
+improve generalization on close-up conjunctiva photos, run:
+
+```bash
+python scripts/train_no_augmentation.py
+```
+
+This trains both **ResNet-50** and **EfficientNet-B0** across all $k$-folds
+with augmentations completely disabled (strictly deterministic resize and
+normalization, identical to validation/test). It keeps all other hyperparameters
+identical (learning rate, optimizer, cosine schedule, class weights, batch size,
+random seed, and patient-stratified splits).
+
+### Flags & Options:
+```bash
+# Train only one architecture:
+python scripts/train_no_augmentation.py --models resnet50
+python scripts/train_no_augmentation.py --models efficientnet_b0
+
+# Retrain from scratch ignoring completed folds:
+python scripts/train_no_augmentation.py --fresh
+
+# Fast smoke-test (1 epoch, 2 folds):
+python scripts/train_no_augmentation.py --quick-test
+
+# Prevent updating outputs/experiments/leaderboard.csv (by default it is updated automatically):
+python scripts/train_no_augmentation.py --no-leaderboard
+
+# Re-compute comparison against augmented baselines without retraining:
+python scripts/train_no_augmentation.py --compare-only
+```
+
+### Outputs:
+```
+outputs/no_augmentation/
+├── resnet50/
+│   ├── fold_1/ ... fold_5/
+│   ├── baseline_results_table.csv
+│   └── effective_config.yaml
+├── efficientnet_b0/
+│   ├── fold_1/ ... fold_5/
+│   ├── baseline_results_table.csv
+│   └── effective_config.yaml
+├── ablation_comparison.csv          # quantitative delta for all metrics
+└── ablation_report.md               # complete ablation markdown report
+```
+
 ## Not built yet
 
-- Decision-threshold tuning (currently a fixed 0.5 cutoff on the softmax
-  probability — since F2 already favors recall via the loss weighting and
-  metric choice, lowering the threshold further is a natural next
-  experiment once you have a baseline number to compare against).
 - The cross-dataset generalization run (CP-AnemiC ↔ Indian dataset) — this
   harness trains and evaluates on one dataset; the cross-dataset script is
   a thin wrapper around the same `build_model` / `evaluate` functions once
   the second dataset has its own metadata CSV in the same schema.
+

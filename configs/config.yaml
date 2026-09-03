@@ -214,4 +214,20 @@ experiments:
           color_jitter: 0.3
           random_erasing_prob: 0.25
 
+# ------------------------------------------------------------------------------
+# Ablation study: Data Augmentation impact analysis
+#
+#   python scripts/train_no_augmentation.py
+#
+# Evaluates ResNet-50 and EfficientNet-B0 with all augmentations (horizontal
+# flips, rotation, color/saturation jitter, random erasing) disabled, and
+# compiles an ablation comparison report showing exact performance gains.
+# ------------------------------------------------------------------------------
+ablation:
+  output_dir: "outputs/no_augmentation"
+  models:
+    - "resnet50"
+    - "efficientnet_b0"
+
 random_seed: 42
+

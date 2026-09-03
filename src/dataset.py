@@ -45,18 +45,21 @@ class ConjunctivaDataset(Dataset):
         return img, label
 
 
-def build_transforms(image_size: int, train: bool, augmentation: dict | None = None) -> transforms.Compose:
+def build_transforms(image_size: int, train: bool, augmentation: dict | bool | None = None) -> transforms.Compose:
     """Train gets light augmentation appropriate for close-up clinical photos
     (flips/rotation/color jitter — no crops that could cut into the already-
     tight conjunctiva ROI, and no vertical flip since these images have a
-    consistent up/down orientation unlike a generic photo). Val/test is
+    consistent up/down orientation unlike a generic photo), unless augmentation
+    is explicitly disabled (augmentation=False or augmentation.get('enabled')=False),
+    in which case deterministic resize + normalize is used. Val/test is always
     deterministic resize + normalize.
 
     `augmentation` (only used when train=True) lets experiments tune
-    regularization strength without touching this file — see
-    `training.augmentation` in the config. Defaults match the original
+    regularization strength or disable augmentations completely without touching
+    this file — see `training.augmentation` in the config. Defaults match the original
     fixed values if not provided."""
-    if not train:
+    # Val/test or explicitly disabled augmentation -> strictly deterministic
+    if not train or augmentation is False:
         return transforms.Compose(
             [
                 transforms.Resize((image_size, image_size)),
@@ -65,19 +68,34 @@ def build_transforms(image_size: int, train: bool, augmentation: dict | None = N
             ]
         )
 
-    aug = augmentation or {}
+    aug = augmentation if isinstance(augmentation, dict) else {}
+    if aug.get("enabled") is False:
+        return transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ]
+        )
+
+    horizontal_flip = aug.get("horizontal_flip", True)
     rotation_degrees = aug.get("rotation_degrees", 15)
     color_jitter = aug.get("color_jitter", 0.2)
     random_erasing_prob = aug.get("random_erasing_prob", 0.0)
 
-    tf_list = [
-        transforms.Resize((image_size, image_size)),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomRotation(degrees=rotation_degrees),
-        transforms.ColorJitter(brightness=color_jitter, contrast=color_jitter, saturation=color_jitter),
+    tf_list = [transforms.Resize((image_size, image_size))]
+    if horizontal_flip:
+        tf_list.append(transforms.RandomHorizontalFlip(p=0.5))
+    if rotation_degrees > 0:
+        tf_list.append(transforms.RandomRotation(degrees=rotation_degrees))
+    if color_jitter > 0:
+        tf_list.append(transforms.ColorJitter(brightness=color_jitter, contrast=color_jitter, saturation=color_jitter))
+
+    tf_list.extend([
         transforms.ToTensor(),
         transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ]
+    ])
+
     if random_erasing_prob > 0:
         # Must come after ToTensor — RandomErasing operates on tensors, not
         # PIL images. Blanks out a random rectangular patch each draw, which
