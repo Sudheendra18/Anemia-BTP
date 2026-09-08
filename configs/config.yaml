@@ -106,7 +106,7 @@ training:
   # visually confirmed which crop quality you trust.
   image_source: "with_roi"          # "with_roi" | "raw"
 
-  architecture: "resnet50"          # "resnet50" | "efficientnet_b0"
+  architecture: "efficientnet_b0"  # "resnet50" | "efficientnet_b0" (EfficientNet-B0 is the winning leaderboard model)
   pretrained: true
   # Freeze the backbone and only train the new classification head. Good for
   # a fast first baseline on a small dataset; set false for full fine-tuning.

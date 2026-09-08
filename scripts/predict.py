@@ -134,7 +134,7 @@ def main():
     parser.add_argument("--output", default="outputs/predictions/predictions.csv", help="Output CSV path. Default: outputs/predictions/predictions.csv")
     parser.add_argument("--model-dir", default="outputs/experiments/efficientnet_b0_lr1e-4", help="Path to experiment folder containing fold checkpoints.")
     parser.add_argument("--fold", type=int, default=None, help="Specific fold (1-5) to use. Default: None (5-fold ensemble).")
-    parser.add_argument("--threshold", type=float, default=0.50, help="Decision threshold for Anemic classification (default: 0.50).")
+    parser.add_argument("--threshold", type=float, default=0.58, help="Decision threshold for Anemic classification (default: 0.58, tuned for EfficientNet-B0).")
     parser.add_argument("--extract-roi", action="store_true", help="Automatically crop conjunctiva region before prediction (for full eye photos).")
     parser.add_argument("--config", default="configs/config.yaml", help="Path to config YAML for settings.")
     parser.add_argument("--batch-size", type=int, default=16, help="Inference batch size.")
@@ -166,9 +166,20 @@ def main():
 
     logger.info(f"Found {len(image_paths)} image(s) to process.")
 
-    # 2. Dataset & DataLoader
-    img_size = config["training"].get("image_size", 224)
+    # 2. Resolve Model Configuration & Dataset
+    model_dir = resolve_path(args.model_dir)
+    effective_cfg_path = model_dir / "effective_config.yaml"
+    if effective_cfg_path.exists():
+        model_train_cfg = load_config(effective_cfg_path).get("training", {})
+        logger.info(f"Loaded model config from {effective_cfg_path.name}")
+    else:
+        model_train_cfg = config.get("training", {})
+
+    arch = model_train_cfg.get("architecture", "efficientnet_b0")
+    num_classes = model_train_cfg.get("num_classes", 2)
+    img_size = model_train_cfg.get("image_size", 224)
     roi_cfg = config.get("roi_extraction", {})
+
     ds = DirectInferenceDataset(
         image_paths=image_paths,
         image_size=img_size,
@@ -178,11 +189,8 @@ def main():
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     # 3. Load Model(s)
-    model_dir = resolve_path(args.model_dir)
-    arch = config["training"].get("architecture", "efficientnet_b0")
-    num_classes = config["training"].get("num_classes", 2)
     models = load_ensemble_models(model_dir, args.fold, arch, num_classes, device)
-    logger.info(f"Loaded {'ensemble of ' + str(len(models)) + ' models' if args.fold is None else f'fold {args.fold}'} from {model_dir.name}")
+    logger.info(f"Loaded architecture '{arch}' ({'ensemble of ' + str(len(models)) + ' models' if args.fold is None else f'fold {args.fold}'}) from {model_dir.name}")
 
     # 4. Run inference
     all_names = []
