@@ -29,3 +29,10 @@ venv/
 *.pkl
 checkpoints/
 
+# AI Agent tooling & local configs
+.agents/
+skills-lock.json
+
+# Temporary scratch & build directories
+tmp/
+temp*/
