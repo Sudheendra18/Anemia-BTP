@@ -369,7 +369,7 @@ def load_metadata_and_splits(config: dict, logger) -> tuple[pd.DataFrame, str, l
             f"(Stage 1, and Stage 2 if training.image_source is 'with_roi')."
         )
 
-    df = pd.read_csv(metadata_csv)
+    df = pd.read_csv(metadata_csv, dtype={"patient_id": str, "image_id": str})
     before = len(df)
     df = df[df[image_col].notna()].reset_index(drop=True)
     if len(df) < before:

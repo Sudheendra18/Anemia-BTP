@@ -70,12 +70,20 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
             "original": None,
         }
 
+    return extract_roi_array(img, roi_cfg)
+
+
+def extract_roi_array(img: np.ndarray, roi_cfg: dict | None = None) -> dict:
+    """Extract directly from a decoded BGR frame, avoiding a disk round trip."""
+    roi_cfg = roi_cfg or {}
+    if img is None or img.size == 0 or img.ndim != 3 or img.shape[2] != 3:
+        raise ValueError("Expected a nonempty BGR image")
     orig_h, orig_w = img.shape[:2]
 
     # Standard processing resolution for speed, scale invariance, and noise suppression
     target_long = roi_cfg.get("resize_long_side", 800)
-    scale = target_long / max(orig_h, orig_w) if target_long else 1.0
-    pw, ph = int(orig_w * scale), int(orig_h * scale)
+    scale = min(1.0, target_long / max(orig_h, orig_w)) if target_long else 1.0
+    pw, ph = max(1, int(orig_w * scale)), max(1, int(orig_h * scale))
     small = cv2.resize(img, (pw, ph), interpolation=cv2.INTER_AREA) if scale != 1.0 else img.copy()
 
     # 1. Color space transformations
@@ -204,7 +212,7 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
 
     if status == "ok" and cv2.countNonZero(best_mask) > 0:
         ys, xs = np.where(best_mask > 0)
-        sx0, sy0, sx1, sy1 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+        sx0, sy0, sx1, sy1 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
 
         pw_pad = int((sx1 - sx0) * pad_w_frac)
         ph_pad = int((sy1 - sy0) * pad_h_frac)
@@ -222,7 +230,7 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
     else:
         status = "fallback"
         fb_frac = roi_cfg.get("fallback_center_crop_frac", 0.6)
-        crop_w, crop_h = int(orig_w * fb_frac), int(orig_h * fb_frac)
+        crop_w, crop_h = max(1, int(orig_w * fb_frac)), max(1, int(orig_h * fb_frac))
         ox0 = (orig_w - crop_w) // 2
         oy0 = int(orig_h * 0.40)
         ox1 = min(orig_w, ox0 + crop_w)

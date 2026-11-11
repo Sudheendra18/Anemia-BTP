@@ -5,6 +5,7 @@ data/raw/Non-anemic/*
 !data/raw/Non-anemic/.gitkeep
 
 # Generated outputs
+outputs/captures/
 outputs/metadata/*
 outputs/roi/*
 outputs/logs/*

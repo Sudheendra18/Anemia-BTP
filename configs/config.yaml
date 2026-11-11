@@ -231,3 +231,15 @@ ablation:
 
 random_seed: 42
 
+# Task_B capture integration. Quality thresholds need calibration on your devices.
+capture:
+  output_dir: "outputs/captures"
+  analysis_width: 640  # maximum analysis dimension; saved frames retain source resolution
+  stride: 2
+  detect_interval: 5  # optical flow between detections; redetect immediately on lost tracking
+  min_sharpness: 35.0
+  brightness_min: 55.0
+  brightness_max: 205.0
+  max_glare: 0.04
+  max_clipped: 0.15
+

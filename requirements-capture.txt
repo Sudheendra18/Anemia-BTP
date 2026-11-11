@@ -1,0 +1,3 @@
+# Optional browser UI; offline --video needs only requirements.txt.
+playwright>=1.40,<2
+# Optional MediaPipe legacy FaceMesh is detected at runtime; Haar works without it.

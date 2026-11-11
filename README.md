@@ -4,6 +4,20 @@ A clinical-grade, end-to-end machine learning pipeline for non-invasive anemia s
 
 This repository covers the complete research workflow: from raw patient image validation and automated conjunctival region-of-interest (ROI) extraction, through patient-stratified deep learning cross-validation, post-hoc clinical threshold tuning, and direct clinical inference.
 
+**Eye capture is now integrated:** [Task_B capture guide](docs/CAPTURE.md) covers
+live eye tracking, focus feedback, efficient best-frame selection from a webcam
+or video, clean ROI output, and importing reviewed captures for training.
+
+```powershell
+.\.venv\Scripts\python.exe scripts/capture.py
+```
+
+The browser UI requires `requirements-capture.txt` and `python -m playwright install chromium`.
+On Windows, you can also double-click `start_capture.cmd`. Patient IDs are
+assigned sequentially on Save. Camera, recording length and optional
+device/distance/lighting details are available in the app; no metadata flags
+or patient-ID typing are required.
+
 ---
 
 ## Table of Contents
