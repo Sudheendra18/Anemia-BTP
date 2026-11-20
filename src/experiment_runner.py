@@ -1,27 +1,4 @@
-"""
-Runs multiple training configurations (architecture / learning-rate
-combinations, defined in `experiments.runs` in the config) back to back, and
-produces a leaderboard ranking them by `training.primary_metric`.
-
-This is the systematic version of "try full fine-tuning" — instead of one
-educated guess, it runs a small, defensible search across the two things
-most likely to matter at this dataset size: architecture (ResNet-50 vs the
-much lighter EfficientNet-B0, which may generalize better on 710 images) and
-learning rate.
-
-Reuses run_kfold_cv() completely unchanged for each experiment — same
-crash-resilient per-fold checkpointing, same resume-on-rerun behavior, just
-pointed at an isolated output directory per experiment
-(outputs/experiments/<name>/). If this whole script gets interrupted,
-rerunning it picks up exactly where it left off: experiments that finished
-are skipped instantly, the interrupted experiment resumes mid-fold exactly
-like a single training run would — nothing extra needed for that, it falls
-out of run_kfold_cv's existing behavior for free.
-
-Usage:
-    python scripts/run_experiments.py
-    python scripts/run_experiments.py --fresh   # ignore all existing progress, retrain everything
-"""
+"""Run configured training experiments and rank them by the primary metric."""
 
 from __future__ import annotations
 
@@ -31,7 +8,6 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train import run_kfold_cv                                     # noqa: E402
@@ -59,16 +35,6 @@ def run_experiments(config: dict, logger, fresh: bool = False) -> pd.DataFrame:
         name = run["name"]
         overrides = run.get("overrides", {})
         exp_config = build_experiment_config(config, name, overrides)
-
-        exp_dir = resolve_path(exp_config["training"]["output_dir"])
-        exp_dir.mkdir(parents=True, exist_ok=True)
-
-        # Saved so analyze_thresholds.py (or anything else) can be pointed
-        # straight at this experiment later with --config, without the user
-        # having to hand-reconstruct what overrides were used.
-        effective_config_path = exp_dir / "effective_config.yaml"
-        with open(effective_config_path, "w") as f:
-            yaml.safe_dump(exp_config, f, sort_keys=False)
 
         logger.info("#" * 70)
         logger.info(f"# EXPERIMENT {i}/{len(runs)}: {name}   overrides={overrides}")

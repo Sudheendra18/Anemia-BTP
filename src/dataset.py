@@ -1,9 +1,4 @@
-"""
-PyTorch Dataset + transforms for CP-AnemiC.
-
-Reads directly from the metadata DataFrame produced by dataset_loader.py /
-roi_extraction.py — no separate on-disk manifest needed.
-"""
+"""PyTorch datasets and image transforms for CP-AnemiC."""
 
 from __future__ import annotations
 
@@ -46,30 +41,9 @@ class ConjunctivaDataset(Dataset):
 
 
 def build_transforms(image_size: int, train: bool, augmentation: dict | bool | None = None) -> transforms.Compose:
-    """Train gets light augmentation appropriate for close-up clinical photos
-    (flips/rotation/color jitter — no crops that could cut into the already-
-    tight conjunctiva ROI, and no vertical flip since these images have a
-    consistent up/down orientation unlike a generic photo), unless augmentation
-    is explicitly disabled (augmentation=False or augmentation.get('enabled')=False),
-    in which case deterministic resize + normalize is used. Val/test is always
-    deterministic resize + normalize.
-
-    `augmentation` (only used when train=True) lets experiments tune
-    regularization strength or disable augmentations completely without touching
-    this file — see `training.augmentation` in the config. Defaults match the original
-    fixed values if not provided."""
-    # Val/test or explicitly disabled augmentation -> strictly deterministic
-    if not train or augmentation is False:
-        return transforms.Compose(
-            [
-                transforms.Resize((image_size, image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-            ]
-        )
-
+    """Build optional training augmentation and deterministic evaluation preprocessing."""
     aug = augmentation if isinstance(augmentation, dict) else {}
-    if aug.get("enabled") is False:
+    if not train or augmentation is False or aug.get("enabled") is False:
         return transforms.Compose(
             [
                 transforms.Resize((image_size, image_size)),
@@ -97,10 +71,7 @@ def build_transforms(image_size: int, train: bool, augmentation: dict | bool | N
     ])
 
     if random_erasing_prob > 0:
-        # Must come after ToTensor — RandomErasing operates on tensors, not
-        # PIL images. Blanks out a random rectangular patch each draw, which
-        # discourages the model from over-relying on any single localized
-        # region of the crop — a standard, well-established regularizer.
+        # RandomErasing requires a tensor, so apply it after ToTensor.
         tf_list.append(transforms.RandomErasing(p=random_erasing_prob, scale=(0.02, 0.15)))
 
     return transforms.Compose(tf_list)

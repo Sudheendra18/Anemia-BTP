@@ -1,8 +1,7 @@
 # Data Contract — `cp_anemic_metadata.csv`
 
-This is the interface between this track (data pipeline / benchmarking) and
-anything downstream (training harness, the capture app's exports, etc.). If
-this schema changes, everyone consuming it needs to know.
+The dataset preparation pipeline writes these files for ROI extraction and
+model training. The capture app maintains its own manifest.
 
 ## `outputs/metadata/cp_anemic_metadata.csv`
 
@@ -21,7 +20,7 @@ Excel sheet.
 | `severity`                      | str    | `Mild` / `Moderate` / `Severe` / `Non-Anemic`, from Excel `Severity`.  |
 | `age_months`                    | int    | From Excel `Age(Months)`.                                              |
 | `gender`                        | str    | `Male` / `Female`.                                                     |
-| `hospital`                      | str    | Source hospital — needed for hospital-stratified k-fold.               |
+| `hospital`                      | str    | Source hospital, available for site-level analysis.                    |
 | `city_town`, `district`, `region`, `country` | str | Geographic metadata, kept for completeness / stratification options. |
 
 ## `outputs/metadata/cp_anemic_issues.csv`
@@ -42,11 +41,35 @@ Everything in `cp_anemic_metadata.csv`, plus:
 | `roi_image_path` | str  | Path to the cropped conjunctiva region, mirrors `image_path`'s label subfolder under `outputs/roi/`. |
 | `roi_status`     | str  | `ok` (color segmentation found a valid region), `fallback` (center-crop used instead — worth a manual look), or `unreadable` (OpenCV couldn't open the file). |
 
-## Known open question (flag for the supervisor)
+## Patient grouping
 
-Whether `patient_id` really is 1:1 with `image_id` in CP-AnemiC — i.e.
-whether any subject contributed more than one image — determines whether
-patient-level k-fold splitting is already satisfied by a plain image-level
-split, or needs an explicit grouping key. Worth confirming before the k-fold
-harness is built, since it changes which `sklearn` splitter is correct
-(`StratifiedKFold` vs `StratifiedGroupKFold`).
+Training uses `StratifiedGroupKFold` to keep rows with the same `patient_id`
+together. The current data uses image IDs as a proxy. If a subject contributed
+multiple images, a verified patient identifier is needed to keep those images
+in the same fold.
+
+## Tuning ROI extraction
+
+Run the ROI stage after building metadata:
+
+```bash
+python scripts/run_pipeline.py --stage roi
+```
+
+Check the successful and fallback crop counts in the log. Review the detected
+box, mask, rectangular crop and masked crop in `outputs/debug/` for images from
+both classes and different capture conditions.
+
+| Setting under `roi_extraction` | Effect |
+| --- | --- |
+| `debug_sample_size` | Number of debug composites to generate |
+| `resize_long_side` | Maximum processing dimension. Use `null` to disable downscaling. |
+| `min_contour_area_frac` | Minimum component area as a fraction of the processed image |
+| `bbox_padding_w_frac` | Horizontal padding as a fraction of the detected width. Defaults to 0.04. |
+| `bbox_padding_h_frac` | Vertical padding as a fraction of the detected height. Defaults to 0.08. |
+| `fallback_center_crop_frac` | Center crop fraction used when segmentation fails |
+
+The batch extractor combines fixed hue and luminance filters with an adaptive
+redness threshold in `src/roi_extraction.py`. If the mask still misses tissue
+after checking the component settings, inspect those filters against
+representative images. Compare the debug examples before and after adjustments.

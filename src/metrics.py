@@ -1,12 +1,4 @@
-"""
-Standard results module: accuracy, sensitivity, specificity, F1, F2, AUC,
-plus confusion-matrix / ROC / precision-recall plots — per the Work
-Package A spec.
-
-Convention throughout: label 1 = Anemic (positive class), label 0 =
-Non-anemic. Sensitivity/specificity are defined relative to the Anemic class,
-which is the clinically meaningful framing for a screening tool.
-"""
+"""Classification metrics and plots with Anemic encoded as the positive class (1)."""
 
 from __future__ import annotations
 
@@ -14,7 +6,7 @@ from pathlib import Path
 
 import matplotlib
 
-matplotlib.use("Agg")  # headless — never try to open a GUI window
+matplotlib.use("Agg")  # Use a headless backend.
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -40,7 +32,7 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) 
 
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
 
-    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else float("nan")  # a.k.a. recall on Anemic
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else float("nan")
     specificity = tn / (tn + fp) if (tn + fp) > 0 else float("nan")
 
     accuracy = accuracy_score(y_true, y_pred)
@@ -50,7 +42,7 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) 
     try:
         auc = roc_auc_score(y_true, y_prob)
     except ValueError:
-        # happens if y_true is single-class in this split (e.g. a tiny debug run)
+        # ROC AUC is undefined for a single-class split.
         auc = float("nan")
 
     return {
@@ -167,18 +159,12 @@ def plot_training_curves(history: dict, save_path: str | Path, title: str = "Tra
 
 
 def apply_threshold(y_prob: np.ndarray, threshold: float) -> np.ndarray:
-    """Turns positive-class probabilities into 0/1 predictions at a custom
-    cutoff, instead of the implicit 0.5 cutoff that torch.argmax gives you.
-    Anything that makes real (non-0.5) predictions should route through this,
-    so there's exactly one place that encodes what the decision rule is."""
+    """Classify scores at or above the threshold as positive."""
     return (np.asarray(y_prob) >= threshold).astype(int)
 
 
 def sweep_thresholds(y_true: np.ndarray, y_prob: np.ndarray, thresholds: np.ndarray | None = None) -> pd.DataFrame:
-    """Computes the full metric set at each candidate threshold. One row per
-    threshold — this is the raw material for picking an operating point
-    other than the default 0.5, and for plotting the sensitivity/specificity
-    tradeoff."""
+    """Compute classification metrics for each candidate threshold."""
     if thresholds is None:
         thresholds = np.round(np.arange(0.05, 0.96, 0.01), 2)
 
@@ -193,17 +179,9 @@ def sweep_thresholds(y_true: np.ndarray, y_prob: np.ndarray, thresholds: np.ndar
 
 
 def recommend_thresholds(sweep_df: pd.DataFrame, sensitivity_floor: float = 0.90) -> dict:
-    """Three different, defensible ways to pick an operating point, since
-    "optimal" depends on what you're optimizing for:
-      - max_f2: whatever the training harness already optimizes for.
-      - max_youden_j: sensitivity + specificity - 1, maximized. The standard
-        "best overall balance" criterion in diagnostic-test literature.
-      - max_specificity_at_sensitivity_floor: the most clinically motivated
-        for a screening tool — hold sensitivity at or above `sensitivity_floor`
-        (don't miss more anemic cases than that), and get the best specificity
-        available without violating it. Falls back to the highest-sensitivity
-        row if no threshold actually reaches the floor.
-    """
+    """Select thresholds by F2, Youden J, and specificity at a sensitivity floor.
+
+    If the floor is unmet, use the highest-sensitivity threshold."""
     df = sweep_df.copy()
     df["youden_j"] = df["sensitivity"] + df["specificity"] - 1
 
@@ -219,7 +197,6 @@ def recommend_thresholds(sweep_df: pd.DataFrame, sensitivity_floor: float = 0.90
     if len(eligible) > 0:
         best_floor_row = eligible.loc[eligible["specificity"].idxmax()]
     else:
-        # Nothing hit the floor — best we can do is get as close as possible.
         best_floor_row = df.loc[df["sensitivity"].idxmax()]
     recommendations["max_specificity_at_sensitivity_floor"] = best_floor_row.to_dict()
 
@@ -245,9 +222,7 @@ def plot_threshold_sweep(sweep_df: pd.DataFrame, recommended_threshold: float, s
 
 
 def aggregate_fold_metrics(fold_metrics: list[dict]) -> pd.DataFrame:
-    """Turns a list of per-fold metric dicts into a results table: one row
-    per fold plus a 'mean' and 'std' summary row, for the metrics that make
-    sense to average (skips raw confusion-matrix counts)."""
+    """Return per-fold metrics and their mean and standard deviation."""
     df = pd.DataFrame(fold_metrics)
     df.insert(0, "fold", range(1, len(df) + 1))
 

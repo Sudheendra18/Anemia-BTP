@@ -1,23 +1,4 @@
-"""
-Quick, standalone ROI extraction test — point this at ANY folder of images
-(your own uncropped test photos, a sample from another dataset, etc.) and
-see how the real pipeline's ROI extraction behaves on them. Doesn't touch
-the main pipeline's metadata CSV, folder structure, or outputs at all —
-completely separate from scripts/run_pipeline.py.
-
-Uses the exact same extract_roi() function and HSV thresholds from
-configs/config.yaml as the real pipeline, so results are directly
-comparable to what you saw on the 710-image CP-AnemiC run.
-
-Usage:
-    python scripts/test_roi_on_folder.py --input path\\to\\your\\images
-    python scripts/test_roi_on_folder.py --input path\\to\\your\\images --output outputs/roi_test
-
-Output: one debug composite per image (original with detected box | mask |
-cropped result) plus the crop itself, saved to --output (default
-outputs/roi_test/). Green box = confident detection, red box = fallback
-center-crop (no valid region found).
-"""
+"""Save ROI crops and debug composites for a directory of images."""
 
 from __future__ import annotations
 
@@ -88,7 +69,7 @@ def main():
     logger.info("=" * 60)
     logger.info(f"Done: {n_ok} ok, {n_fallback} fallback, {n_unreadable} unreadable  (of {len(image_paths)} total)")
     logger.info(f"Results written to -> {output_dir}")
-    logger.info("Open the debug_*.jpg files: left panel shows the detected box (green=confident, red=fallback), middle is the color mask, right is the actual crop.")
+    logger.info("Debug panels show the detected box, tissue mask, rectangular crop, and masked crop.")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,4 @@
-"""
-Shared utilities: config loading, logging, small path helpers.
-
-Nothing in this file is dataset-specific — it's plumbing used by both
-dataset_loader.py and roi_extraction.py so the two stages behave consistently.
-"""
+"""Configuration, logging, and project-relative path utilities."""
 
 from __future__ import annotations
 
@@ -14,14 +9,18 @@ from typing import Any
 
 import yaml
 
-# Project root = parent of this file's parent (src/ -> repo root)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def read_metadata_csv(path):
+    """Preserve string IDs while retaining missing-value inference for other columns."""
+    import pandas as pd
+
+    return pd.read_csv(path, converters={"patient_id": str, "image_id": str})
+
+
 def load_config(config_path: str | Path) -> dict[str, Any]:
-    """Load the YAML config and resolve all relative paths against the
-    project root, so scripts behave the same regardless of the working
-    directory they're invoked from."""
+    """Load YAML from an absolute path or a path relative to the project root."""
     config_path = Path(config_path)
     if not config_path.is_absolute():
         config_path = PROJECT_ROOT / config_path
@@ -30,7 +29,7 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
         raise FileNotFoundError(
             f"Config file not found: {config_path}\n"
             f"Pass the path explicitly with --config, e.g.\n"
-            f"  python scripts/build_metadata.py --config configs/config.yaml"
+            f"  python scripts/run_pipeline.py --stage metadata --config configs/config.yaml"
         )
 
     with open(config_path, "r") as f:
@@ -51,7 +50,7 @@ def setup_logging(log_file: str | Path | None = None, level: int = logging.INFO)
     """Console + optional file logging. Every stage script calls this once."""
     logger = logging.getLogger("cp_anemic_pipeline")
     logger.setLevel(level)
-    logger.handlers.clear()  # avoid duplicate handlers if called twice in one process
+    logger.handlers.clear()
 
     fmt = logging.Formatter("%(asctime)s | %(levelname)-7s | %(message)s", datefmt="%H:%M:%S")
 

@@ -1,27 +1,4 @@
-"""
-Direct Inference / Prediction Script
-
-Run your trained EfficientNet model directly on ANY folder of images (or a single image)
-without needing to organize them into subfolders or provide labels.
-
-Outputs:
-  - Prints predicted class (Anemic vs Non-anemic) & confidence probability for each image.
-  - Generates a summary count (e.g. 15 Anemic, 10 Non-anemic).
-  - Saves a CSV with image names, paths, predicted probabilities, and classifications.
-
-Usage examples:
-    # 1. Run on a folder of cropped conjunctiva images:
-    python scripts/predict.py --input path/to/your/images
-
-    # 2. Run on a folder of raw uncropped eye photos (with automatic ROI extraction):
-    python scripts/predict.py --input path/to/your/images --extract-roi
-
-    # 3. Run on a single image:
-    python scripts/predict.py --input path/to/image.jpg
-
-    # 4. Use custom threshold or output location:
-    python scripts/predict.py --input path/to/your/images --threshold 0.58 --output outputs/my_predictions.csv
-"""
+"""Run inference on an image or directory and save predictions to CSV."""
 
 from __future__ import annotations
 
@@ -35,13 +12,12 @@ import pandas as pd
 from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from model import build_model
-from dataset import IMAGENET_MEAN, IMAGENET_STD
-from roi_extraction import extract_roi
+from dataset import build_transforms
+from roi_extraction import extract_roi_array
 from metrics import apply_threshold
 from utils import load_config, resolve_path, setup_logging
 
@@ -55,14 +31,9 @@ class DirectInferenceDataset(Dataset):
         roi_cfg: dict | None = None,
     ):
         self.image_paths = image_paths
-        self.image_size = image_size
         self.do_extract_roi = do_extract_roi
         self.roi_cfg = roi_cfg or {}
-        self.transform = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-        ])
+        self.transform = build_transforms(image_size, train=False)
 
     def __len__(self) -> int:
         return len(self.image_paths)
@@ -75,10 +46,9 @@ class DirectInferenceDataset(Dataset):
 
         roi_status = "original"
         if self.do_extract_roi:
-            roi_res = extract_roi(str(img_path), self.roi_cfg)
-            if roi_res["status"] != "unreadable" and roi_res.get("roi") is not None:
-                img_bgr = roi_res["roi"]
-                roi_status = roi_res["status"]
+            roi_res = extract_roi_array(img_bgr, self.roi_cfg)
+            img_bgr = roi_res["roi"]
+            roi_status = roi_res["status"]
 
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         img_pil = Image.fromarray(img_rgb)
@@ -90,28 +60,21 @@ class DirectInferenceDataset(Dataset):
 def load_ensemble_models(model_dir: Path, fold: int | None, architecture: str, num_classes: int, device: torch.device):
     models = []
     if fold is not None:
-        ckpt_path = model_dir / f"fold_{fold}" / "best_model.pt"
-        if not ckpt_path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+        paths = [model_dir / f"fold_{fold}" / "best_model.pt"]
+        if not paths[0].is_file():
+            raise FileNotFoundError(f"Checkpoint not found: {paths[0]}")
+    else:
+        paths = sorted(path for path in model_dir.glob("fold_*/best_model.pt") if path.is_file())
+        if not paths:
+            raise FileNotFoundError(f"No fold checkpoints found under: {model_dir}")
+
+    for ckpt_path in paths:
         model = build_model(architecture, num_classes=num_classes, pretrained=False)
         state_dict = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(state_dict)
         model.to(device)
         model.eval()
-        models.append((f"fold_{fold}", model))
-    else:
-        fold_dirs = sorted(model_dir.glob("fold_*"))
-        for f_dir in fold_dirs:
-            ckpt_path = f_dir / "best_model.pt"
-            if ckpt_path.exists():
-                model = build_model(architecture, num_classes=num_classes, pretrained=False)
-                state_dict = torch.load(ckpt_path, map_location=device)
-                model.load_state_dict(state_dict)
-                model.to(device)
-                model.eval()
-                models.append((f_dir.name, model))
-        if not models:
-            raise FileNotFoundError(f"No fold checkpoints found under: {model_dir}")
+        models.append((ckpt_path.parent.name, model))
     return models
 
 
@@ -148,7 +111,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    # 1. Discover image(s)
     input_path = Path(args.input)
     if not input_path.is_absolute():
         input_path = Path.cwd() / input_path
@@ -166,7 +128,6 @@ def main():
 
     logger.info(f"Found {len(image_paths)} image(s) to process.")
 
-    # 2. Resolve Model Configuration & Dataset
     model_dir = resolve_path(args.model_dir)
     effective_cfg_path = model_dir / "effective_config.yaml"
     if effective_cfg_path.exists():
@@ -188,11 +149,9 @@ def main():
     )
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-    # 3. Load Model(s)
     models = load_ensemble_models(model_dir, args.fold, arch, num_classes, device)
     logger.info(f"Loaded architecture '{arch}' ({'ensemble of ' + str(len(models)) + ' models' if args.fold is None else f'fold {args.fold}'}) from {model_dir.name}")
 
-    # 4. Run inference
     all_names = []
     all_paths = []
     all_probs = []
@@ -229,7 +188,6 @@ def main():
 
     results_df.to_csv(output_csv, index=False)
 
-    # 5. Display Summary
     n_anemic = int((y_pred == 1).sum())
     n_non_anemic = int((y_pred == 0).sum())
 
@@ -238,7 +196,7 @@ def main():
     print("=" * 65)
     print(f"{'Image Name':<30} {'Probability (Anemic)':<22} {'Prediction'}")
     print("-" * 65)
-    for idx, row in results_df.head(20).iterrows():
+    for _, row in results_df.head(20).iterrows():
         prob_str = f"{row['prob_anemic']:.4f} ({row['confidence_percent']}%)"
         print(f"{row['image_name']:<30} {prob_str:<22} {row['prediction']}")
 

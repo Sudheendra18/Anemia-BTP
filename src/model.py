@@ -1,7 +1,4 @@
-"""
-Model factory: transfer-learning CNNs for binary anemic / non-anemic
-classification, per the Work Package A spec (ResNet-50 / EfficientNet).
-"""
+"""ResNet-50 and EfficientNet-B0 classifiers for transfer learning."""
 
 from __future__ import annotations
 
@@ -40,8 +37,7 @@ def build_model(architecture: str, num_classes: int = 2, pretrained: bool = True
 
 
 def count_trainable_params(model: nn.Module) -> tuple[int, int]:
-    """Returns (trainable_params, total_params) — useful to sanity-check
-    that freeze_backbone actually did what you expect."""
+    """Return the number of trainable and total parameters."""
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     return trainable, total

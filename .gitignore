@@ -4,7 +4,12 @@ data/raw/Non-anemic/*
 !data/raw/Anemic/.gitkeep
 !data/raw/Non-anemic/.gitkeep
 
+# Local capture data, including the index and recovery files
+/outputs/captures/
+
 # Generated outputs
+/outputs/predictions/
+/outputs/roi_test/
 outputs/metadata/*
 outputs/roi/*
 outputs/logs/*
@@ -13,6 +18,14 @@ outputs/debug/*
 !outputs/roi/.gitkeep
 !outputs/logs/.gitkeep
 !outputs/debug/.gitkeep
+
+# Local manifests and reports from the capture validation examples
+/roi_labels.csv
+/validation_labels.csv
+/training_patients.csv
+/capture_replay.json
+/roi_validation.json
+/ensemble_validation.json
 
 __pycache__/
 *.pyc
@@ -29,9 +42,11 @@ venv/
 *.pkl
 checkpoints/
 
-# AI Agent tooling & local configs
+# Local tooling and browser logs
 .agents/
+.codex/
 skills-lock.json
+/debug.log
 
 # Temporary scratch & build directories
 tmp/

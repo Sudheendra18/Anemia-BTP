@@ -1,25 +1,4 @@
-"""
-Stage 2 — Conjunctiva ROI extraction.
-
-CP-AnemiC and smartphone conjunctiva images are close-up photos of a manually
-pulled-down lower eyelid: mostly moist reddish/pink conjunctival tissue in the
-center, framed by sclera, iris/pupil, skin, eyelashes, and flash glare.
-
-This module provides an accurate, illumination-robust conjunctiva segmentation
-and ROI extraction pipeline:
-  1. Multi-space Chromaticity Analysis: Combines Lab a*, YCrCb Cr, HSV Red Hue
-     and normalized excess red (R - G) to distinguish mucosal tissue from
-     surrounding skin, sclera, iris, and glare.
-  2. Eye-Zone Adaptive Thresholding: Dynamically calculates the mucosal redness
-     threshold based on the chromatic distribution in the ocular region.
-  3. Horizontal Crescent Morphological Bridging: Bridges vascular networks and
-     mucosal folds across the horizontal palpebral arch.
-  4. Anatomical & Geometric Component Scoring: Selects and merges components
-     matching the horizontal aspect ratio, lower-central ocular position,
-     and peak redness density of the palpebral conjunctiva.
-  5. Tight Padded Bounding Box: Produces the rectangular crop (for standard CNN
-     training) and the masked crop (pure mucosal tissue for color analysis).
-"""
+"""Extract rectangular and masked conjunctiva crops from close-up eye images."""
 
 from __future__ import annotations
 
@@ -34,27 +13,15 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from utils import load_config, resolve_path, setup_logging, ensure_parent_dir
+from utils import load_config, read_metadata_csv, resolve_path, setup_logging, ensure_parent_dir
 
 
-# --------------------------------------------------------------------------
-# Core segmentation algorithm
-# --------------------------------------------------------------------------
 
 def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
-    """Run conjunctiva ROI extraction on a single image.
+    """Return rectangular and masked BGR crops at source resolution.
 
-    Parameters:
-      image_path: Path to the input image file.
-      roi_cfg: Configuration dictionary (optional).
-
-    Returns a dict with:
-      status        'ok', 'fallback', or 'unreadable'
-      roi           rectangular crop (original resolution BGR)
-      roi_masked    same crop with non-conjunctiva pixels blacked out (BGR)
-      mask          binary mask in the crop's coordinate frame (uint8, 0/255)
-      bbox          (x0, y0, x1, y1) in original-image coordinates
-      original      the original full-resolution image (BGR)
+    The result includes status (ok, fallback, or unreadable), roi, roi_masked,
+    a crop-local uint8 mask (0/255), bbox (x0, y0, x1, y1), and the original image.
     """
     if roi_cfg is None:
         roi_cfg = {}
@@ -70,15 +37,21 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
             "original": None,
         }
 
+    return extract_roi_array(img, roi_cfg)
+
+
+def extract_roi_array(img: np.ndarray, roi_cfg: dict | None = None) -> dict:
+    """Extract directly from a decoded BGR frame, avoiding a disk round trip."""
+    roi_cfg = roi_cfg or {}
+    if img is None or img.size == 0 or img.ndim != 3 or img.shape[2] != 3:
+        raise ValueError("Expected a nonempty BGR image")
     orig_h, orig_w = img.shape[:2]
 
-    # Standard processing resolution for speed, scale invariance, and noise suppression
     target_long = roi_cfg.get("resize_long_side", 800)
-    scale = target_long / max(orig_h, orig_w) if target_long else 1.0
-    pw, ph = int(orig_w * scale), int(orig_h * scale)
+    scale = min(1.0, target_long / max(orig_h, orig_w)) if target_long else 1.0
+    pw, ph = max(1, int(orig_w * scale)), max(1, int(orig_h * scale))
     small = cv2.resize(img, (pw, ph), interpolation=cv2.INTER_AREA) if scale != 1.0 else img.copy()
 
-    # 1. Color space transformations
     lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
     hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
     ycrcb = cv2.cvtColor(small, cv2.COLOR_BGR2YCrCb)
@@ -93,19 +66,14 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
     g_norm = g_f / sum_rgb
     rg_diff = r_norm - g_norm
 
-    # 2. Eye Zone & Mucosal Chromaticity Filtering
     y_grid = np.arange(ph)[:, None]
     in_eye_zone = (y_grid >= int(0.20 * ph)) & (y_grid <= int(0.90 * ph))
 
-    # Palpebral conjunctiva has Hue in red/magenta range and moderate-to-high saturation
     hsv_red = ((h_ch <= 26) | (h_ch >= 152)) & (s_ch >= 28)
 
-    # Filter out specular glare highlights and dark shadows / eyelashes
     valid_lum = (v_ch >= 40) & ~((v_ch > 245) & (s_ch < 35))
 
-    # Composite Mucosal Redness Index (MRI)
-    # Combines Lab a* (redness), YCrCb Cr (chroma), normalized red-green contrast,
-    # and HSV saturation, while subtracting epidermal yellowness (Lab b*).
+    # Score mucosal redness across color spaces and penalize yellowness.
     mri = (
         (a_ch.astype(np.float32) - 128.0) * 1.0
         + (cr_ch.astype(np.float32) - 128.0) * 1.0
@@ -115,7 +83,6 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
     )
     mri = np.clip(mri, 0, None)
 
-    # 3. Dynamic Thresholding
     eye_mri = mri[in_eye_zone & hsv_red & valid_lum]
     if len(eye_mri) > 50:
         peak_val = np.percentile(eye_mri, 95)
@@ -126,15 +93,13 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
     raw_mask = (mri >= thresh) & hsv_red & valid_lum & in_eye_zone
     mask_u8 = raw_mask.astype(np.uint8) * 255
 
-    # 4. Horizontal Crescent Morphological Bridging
-    # The palpebral conjunctiva is a horizontal crescent spanning across the lower lid
+    # Bridge fragments along the horizontal lower-lid crescent.
     kw = max(9, int(pw * 0.045) | 1)
     kh = max(3, int(ph * 0.015) | 1)
     kernel_h = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kw, kh))
     closed = cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, kernel_h)
     opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
 
-    # 5. Connected Component Analysis with Geometric & Spatial Scoring
     n_lbl, labels, stats, centroids = cv2.connectedComponentsWithStats(opened, connectivity=8)
 
     best_mask = np.zeros_like(opened)
@@ -146,11 +111,9 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
 
         for lbl in range(1, n_lbl):
             area = stats[lbl, cv2.CC_STAT_AREA]
-            bx = stats[lbl, cv2.CC_STAT_LEFT]
-            by = stats[lbl, cv2.CC_STAT_TOP]
             bw = stats[lbl, cv2.CC_STAT_WIDTH]
             bh = stats[lbl, cv2.CC_STAT_HEIGHT]
-            cx, cy = centroids[lbl]
+            _, cy = centroids[lbl]
 
             if area < min_area:
                 continue
@@ -160,7 +123,7 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
             aspect = bw / max(1, bh)
             rel_y = cy / ph
 
-            # Anatomical position prior: lower-middle eye region
+            # Favor components in the lower-middle eye region.
             if 0.35 <= rel_y <= 0.85:
                 pos_weight = 1.0 - 1.5 * ((rel_y - 0.62) ** 2)
             else:
@@ -168,28 +131,22 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
 
             aspect_weight = min(aspect, 3.5) if aspect >= 1.0 else (0.5 * aspect)
             score = area * pos_weight * aspect_weight * (mean_mri ** 1.3)
-            candidates.append({
-                "lbl": lbl, "area": area, "score": score,
-                "bx": bx, "by": by, "bw": bw, "bh": bh, "cx": cx, "cy": cy
-            })
+            candidates.append({"lbl": lbl, "score": score, "cy": cy})
 
         if candidates:
             candidates.sort(key=lambda c: c["score"], reverse=True)
             primary = candidates[0]
 
-            # Retain the primary component plus horizontally aligned crescent segments
             keep_lbls = [primary["lbl"]]
             prim_cy = primary["cy"]
 
             for c in candidates[1:]:
-                # If within vertical alignment of the main crescent band
                 if abs(c["cy"] - prim_cy) < 0.07 * ph:
                     keep_lbls.append(c["lbl"])
 
             for lbl in keep_lbls:
                 best_mask[labels == lbl] = 255
 
-            # Fill internal gaps & smooth boundaries
             contours, _ = cv2.findContours(best_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
                 filled = np.zeros_like(best_mask)
@@ -198,13 +155,12 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
                 best_mask = cv2.morphologyEx(filled, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_smooth, k_smooth)))
                 status = "ok"
 
-    # 6. Bounding Box & Padded ROI Crop
     pad_w_frac = roi_cfg.get("bbox_padding_w_frac", 0.04)
     pad_h_frac = roi_cfg.get("bbox_padding_h_frac", 0.08)
 
     if status == "ok" and cv2.countNonZero(best_mask) > 0:
         ys, xs = np.where(best_mask > 0)
-        sx0, sy0, sx1, sy1 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+        sx0, sy0, sx1, sy1 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
 
         pw_pad = int((sx1 - sx0) * pad_w_frac)
         ph_pad = int((sy1 - sy0) * pad_h_frac)
@@ -222,7 +178,7 @@ def extract_roi(image_path: str, roi_cfg: dict | None = None) -> dict:
     else:
         status = "fallback"
         fb_frac = roi_cfg.get("fallback_center_crop_frac", 0.6)
-        crop_w, crop_h = int(orig_w * fb_frac), int(orig_h * fb_frac)
+        crop_w, crop_h = max(1, int(orig_w * fb_frac)), max(1, int(orig_h * fb_frac))
         ox0 = (orig_w - crop_w) // 2
         oy0 = int(orig_h * 0.40)
         ox1 = min(orig_w, ox0 + crop_w)
@@ -298,10 +254,10 @@ def run_batch(config: dict, logger) -> pd.DataFrame:
 
     if not metadata_csv.exists():
         raise FileNotFoundError(
-            f"Metadata CSV not found at {metadata_csv}. Run scripts/build_metadata.py first."
+            f"Metadata CSV not found at {metadata_csv}. Run scripts/run_pipeline.py --stage metadata first."
         )
 
-    df = pd.read_csv(metadata_csv)
+    df = read_metadata_csv(metadata_csv)
     logger.info(f"Loaded {len(df)} rows from {metadata_csv}")
 
     if len(df) == 0:

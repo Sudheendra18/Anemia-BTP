@@ -1,45 +1,14 @@
-"""
-Ablation Study: Model Training & Evaluation WITHOUT Data Augmentation.
-
-Evaluates how much data augmentations (horizontal flipping, random rotation,
-color jitter / saturation changes, and random erasing) contribute to the performance
-of ResNet-50 and EfficientNet-B0 on the CP-AnemiC dataset.
-
-All augmentations are completely disabled:
-- No RandomHorizontalFlip
-- No RandomRotation
-- No ColorJitter (brightness, contrast, saturation)
-- No RandomErasing
-Only deterministic Resize and ImageNet Normalization are applied (identical to validation/test).
-
-Maintains exact parity with standard training:
-- Same patient-level StratifiedGroupKFold splits
-- Same learning rate, weight decay, and optimizer
-- Same CosineAnnealingLR scheduler
-- Same class-weight balance
-- Same early stopping primary metric (F2)
-- Same evaluation metrics (Accuracy, Sensitivity, Specificity, F1, F2, AUC)
-
-Results and models are saved in isolated directories:
-  outputs/no_augmentation/resnet50/
-  outputs/no_augmentation/efficientnet_b0/
-
-An ablation comparison table and report are generated at:
-  outputs/no_augmentation/ablation_comparison.csv
-  outputs/no_augmentation/ablation_report.md
-"""
+"""Compare standard training with runs that disable image augmentation."""
 
 from __future__ import annotations
 
 import argparse
 import copy
-import json
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train import run_kfold_cv                                     # noqa: E402
@@ -63,7 +32,6 @@ def build_no_aug_config(
     train_cfg["architecture"] = architecture
     train_cfg["output_dir"] = str(output_dir)
 
-    # Strictly disable all augmentations
     train_cfg["augmentation"] = {
         "enabled": False,
         "horizontal_flip": False,
@@ -88,23 +56,17 @@ def load_augmented_baseline_metrics(
     config: dict,
     logger,
 ) -> dict[str, tuple[float, float]] | None:
-    """Retrieves mean and std metrics for the augmented counterpart of this architecture.
-
-    Looks up:
-    1. outputs/experiments/leaderboard.csv
-    2. outputs/training/baseline_results_table.csv (if matching architecture)
-    """
+    """Read augmented metrics from the leaderboard or the matching baseline run."""
     exp_output = config.get("experiments", {}).get("output_dir", "outputs/experiments")
     leaderboard_csv = resolve_path(exp_output) / "leaderboard.csv"
 
     if leaderboard_csv.exists():
         try:
             ldf = pd.read_csv(leaderboard_csv)
-            # Find closest matching run for this architecture
             prefix = architecture.lower()
-            matching = ldf[ldf["experiment"].str.lower().str.startswith(prefix)]
+            names = ldf["experiment"].str.lower()
+            matching = ldf[names.str.startswith(prefix, na=False) & ~names.str.endswith("_no_aug", na=False)]
             if not matching.empty:
-                # Select the best standard run (e.g. lr1e-4 without extra custom wd/aug suffix if available)
                 best_row = matching.iloc[0]
                 for candidate_name in [f"{prefix}_lr1e-4", prefix]:
                     cand = matching[matching["experiment"] == candidate_name]
@@ -123,7 +85,6 @@ def load_augmented_baseline_metrics(
         except Exception as e:
             logger.warning(f"Failed to parse leaderboard.csv: {e}")
 
-    # Fallback to Stage 3 baseline run if architecture matches
     training_output = config.get("training", {}).get("output_dir", "outputs/training")
     baseline_csv = resolve_path(training_output) / "baseline_results_table.csv"
     base_arch = config.get("training", {}).get("architecture", "").lower()
@@ -131,15 +92,8 @@ def load_augmented_baseline_metrics(
     if baseline_csv.exists() and base_arch == architecture.lower():
         try:
             bdf = pd.read_csv(baseline_csv)
-            mean_row = bdf[bdf["fold"] == "mean"].iloc[0]
-            std_row = bdf[bdf["fold"] == "std"].iloc[0]
             logger.info(f"Loaded augmented baseline for '{architecture}' from baseline_results_table.csv")
-            results = {}
-            for m in METRICS_LIST:
-                mean_val = float(mean_row.get(m, np.nan))
-                std_val = float(std_row.get(m, np.nan))
-                results[m] = (mean_val, std_val)
-            return results
+            return extract_mean_std_from_results(bdf)
         except Exception as e:
             logger.warning(f"Failed to parse baseline_results_table.csv: {e}")
 
@@ -184,7 +138,7 @@ def update_experiments_leaderboard(
 
     try:
         ldf = pd.read_csv(leaderboard_csv)
-        ldf = ldf[ldf["experiment"] != exp_name]  # overwrite if already present
+        ldf = ldf[ldf["experiment"] != exp_name]
         new_row_df = pd.DataFrame([new_entry])
         ldf = pd.concat([ldf, new_row_df], ignore_index=True)
 
@@ -239,19 +193,17 @@ def compute_ablation_comparison(
     comparison_df.to_csv(csv_path, index=False)
     logger.info(f"Saved ablation comparison table -> {csv_path}")
 
-    # Generate Markdown Report
     report_md_path = output_root / "ablation_report.md"
     generate_markdown_report(comparison_df, report_md_path)
     logger.info(f"Saved ablation summary report -> {report_md_path}")
 
-    # Console display
     log_comparison_summary(comparison_df, logger)
 
     return comparison_df
 
 
 def log_comparison_summary(df: pd.DataFrame, logger) -> None:
-    """Prints a beautiful formatted comparison to the logger."""
+    """Log mean, standard deviation, and metric differences."""
     logger.info("=" * 90)
     logger.info(" DATA AUGMENTATION ABLATION STUDY: SUMMARY OF RESULTS")
     logger.info("=" * 90)
@@ -280,16 +232,12 @@ def generate_markdown_report(df: pd.DataFrame, out_path: Path) -> None:
     lines = [
         "# Data Augmentation Ablation Study Report",
         "",
-        "## Overview",
-        "This ablation study evaluates the empirical effect of training-time data augmentations",
-        "(specifically: horizontal flipping, random rotation, and color jitter for saturation/brightness/contrast)",
-        "on transfer-learning models (**ResNet-50** and **EfficientNet-B0**) for conjunctival anemia detection.",
+        "This report compares saved metrics from augmented and no-augmentation runs.",
+        "Values are fold means and standard deviations. Absolute differences are",
+        "computed as the augmented mean minus the no-augmentation mean.",
         "",
-        "### Training Protocol Parity",
-        "- **Validation/Test**: Deterministic resize (224x224) and ImageNet normalization.",
-        "- **Standard Model (With Augmentation)**: Includes random horizontal flip (50%), rotation (±15°), and color jitter (factor 0.2).",
-        "- **Ablation Model (No Augmentation)**: Stripped of all data augmentations. Pure deterministic resize and normalization during training.",
-        "- **Splits & Settings**: Identical patient-level StratifiedGroupKFold splits (k=5), Adam optimizer, cosine learning-rate decay, and class-balanced loss weights.",
+        "Consult each run's effective_config.yaml for its training settings.",
+        "Check that settings and patient splits match before attributing differences to augmentation.",
         "",
         "## Performance Comparison",
         "",
@@ -315,14 +263,8 @@ def generate_markdown_report(df: pd.DataFrame, out_path: Path) -> None:
 
     lines.extend([
         "",
-        "## Key Clinical Takeaways",
-        "1. **Generalization & Regularization**: On clinical datasets with close-up mucosal tissue images, augmentations prevent CNN backbones from overfitting to specific vascular orientations and lighting variations.",
-        "2. **Screening Sensitivity**: Preserving high Sensitivity and F2 score ensures minimal false negatives (missed anemia cases) while maintaining solid specificity.",
-        "3. **Architecture Robustness**: EfficientNet-B0 (lightweight compound scaling) and ResNet-50 both benefit from invariance to patient head tilt (rotation) and bilateral eye symmetry (horizontal flip).",
-        "",
-        "> [!TIP]",
-        "> Checkpoints, training loss curves, ROC curves, and confusion matrices for each fold are saved in:",
-        "> `outputs/no_augmentation/<model_name>/`",
+        "Per-fold checkpoints and plots are stored in each architecture's subdirectory",
+        "alongside this report.",
     ])
 
     with open(out_path, "w", encoding="utf-8") as f:
@@ -353,7 +295,6 @@ def run_no_augmentation_ablation(
         arch_out_dir = output_root / arch
         results_csv = arch_out_dir / "baseline_results_table.csv"
 
-        # Load or run training
         if compare_only:
             if not results_csv.exists():
                 logger.warning(f"[{arch}] No results table found at {results_csv}. Cannot perform comparison without training.")
@@ -367,29 +308,19 @@ def run_no_augmentation_ablation(
             logger.info(" Augmentations disabled: No horizontal flip, no rotation, no color jitter.")
             logger.info("=" * 70)
 
-            # Build isolated no-aug config
             lr = 0.0001
             arch_cfg = build_no_aug_config(config, arch, arch_out_dir, learning_rate=lr, quick_test=quick_test)
 
-            # Persist effective config for reproducibility
-            arch_out_dir.mkdir(parents=True, exist_ok=True)
-            with open(arch_out_dir / "effective_config.yaml", "w") as f:
-                yaml.safe_dump(arch_cfg, f, sort_keys=False)
-
-            # Run CV
             res_df = run_kfold_cv(arch_cfg, logger, fresh=fresh)
             ablation_results[arch] = extract_mean_std_from_results(res_df)
 
-        # Update leaderboard by default
-        if update_leaderboard and not quick_test and 'res_df' in locals():
+        if update_leaderboard and not quick_test:
             update_experiments_leaderboard(arch, res_df, config, logger)
 
-        # Retrieve augmented counterpart metrics
         aug_metrics = load_augmented_baseline_metrics(arch, config, logger)
         if aug_metrics:
             augmented_baselines[arch] = aug_metrics
 
-    # Compute comparison
     comparison_df = compute_ablation_comparison(
         ablation_results=ablation_results,
         augmented_baselines=augmented_baselines,

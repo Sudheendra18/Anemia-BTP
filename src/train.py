@@ -1,17 +1,4 @@
-"""
-Stage 3 — Baseline model training / evaluation harness.
-
-Runs patient-level stratified k-fold cross-validation on a transfer-learning
-CNN (ResNet-50 or EfficientNet-B0), with early stopping on a configurable
-primary metric, and writes per-fold + aggregated results (metrics table,
-confusion matrix / ROC / PR plots) — per the Work Package A spec.
-
-Group-aware splitting: uses StratifiedGroupKFold with `patient_id` as the
-group key. Today patient_id == image_id in this dataset (see
-docs/DATA_CONTRACT.md for why), so this currently behaves identically to a
-plain StratifiedKFold — but it's already correct if/when true multi-image
-patient IDs are available, with zero code changes needed.
-"""
+"""Train and evaluate CNNs with patient-grouped cross-validation and per-fold checkpoints."""
 
 from __future__ import annotations
 
@@ -26,6 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import yaml
 from sklearn.model_selection import StratifiedGroupKFold
 from torch.utils.data import DataLoader
 
@@ -40,7 +28,8 @@ from metrics import (                                              # noqa: E402
     plot_training_curves,
     aggregate_fold_metrics,
 )
-from utils import load_config, resolve_path, setup_logging  # noqa: E402
+from utils import load_config, read_metadata_csv, resolve_path, setup_logging  # noqa: E402
+from model_contract import training_identity, input_format, check_run_manifest, file_hash
 
 
 def set_seed(seed: int) -> None:
@@ -57,9 +46,7 @@ def get_device(logger) -> torch.device:
         name = torch.cuda.get_device_name(idx)
         total_mem_gb = torch.cuda.get_device_properties(idx).total_memory / (1024 ** 3)
         logger.info(f"Using device: cuda ({name}, {total_mem_gb:.1f} GB)")
-        # Image size is fixed across every batch (training.image_size), so
-        # cuDNN can safely autotune the fastest conv algorithms for that
-        # exact shape instead of replanning every call.
+        # Fixed input shapes allow cuDNN to benchmark convolution algorithms.
         torch.backends.cudnn.benchmark = True
         return device
 
@@ -128,7 +115,7 @@ def evaluate(model, loader, criterion, device, use_amp: bool):
 
 def compute_class_weights(labels: np.ndarray, num_classes: int) -> torch.Tensor:
     counts = np.bincount(labels, minlength=num_classes).astype(np.float64)
-    counts = np.where(counts == 0, 1, counts)  # avoid div-by-zero on a pathologically tiny split
+    counts = np.where(counts == 0, 1, counts)  # Avoid division by zero when a class is absent.
     weights = len(labels) / (num_classes * counts)
     return torch.tensor(weights, dtype=torch.float32)
 
@@ -141,18 +128,11 @@ def run_single_fold(fold_idx: int, train_df: pd.DataFrame, val_df: pd.DataFrame,
         shutil.rmtree(fold_dir)
     fold_dir.mkdir(parents=True, exist_ok=True)
 
-    # Fingerprint of the settings that would make a saved checkpoint invalid
-    # to resume from (different architecture/model shape, different image
-    # pipeline). If this doesn't match what's in a found checkpoint, the
-    # checkpoint is stale and gets ignored rather than corrupting the run.
-    config_fingerprint = {
-        "architecture": train_cfg["architecture"],
-        "image_source": train_cfg["image_source"],
-        "freeze_backbone": train_cfg["freeze_backbone"],
-        "image_size": train_cfg["image_size"],
-        "num_classes": train_cfg["num_classes"],
-        "lr_scheduler": train_cfg.get("lr_scheduler", "none"),
-    }
+    config_fingerprint = training_identity(config, train_df, val_df, image_col)
+    run_manifest = dict(version=1, fingerprint=config_fingerprint,
+                        input_format=input_format(pd.concat([train_df, val_df]), image_col))
+    check_run_manifest(fold_dir, run_manifest)
+    (fold_dir / "run_manifest.json").write_text(json.dumps(run_manifest, indent=2), encoding="utf-8")
 
     train_tf = build_transforms(train_cfg["image_size"], train=True, augmentation=train_cfg.get("augmentation"))
     val_tf = build_transforms(train_cfg["image_size"], train=False)
@@ -199,16 +179,12 @@ def run_single_fold(fold_idx: int, train_df: pd.DataFrame, val_df: pd.DataFrame,
     if lr_scheduler_name == "cosine":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=train_cfg["num_epochs"])
     elif lr_scheduler_name == "plateau":
-        # mode="max": every metric this harness uses as primary_metric (f2, f1,
-        # auc, accuracy, sensitivity) is better when higher.
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=3)
     elif lr_scheduler_name == "none":
         scheduler = None
     else:
         raise ValueError(f"Unknown lr_scheduler: '{lr_scheduler_name}'. Supported: 'none', 'cosine', 'plateau'.")
 
-    # Mixed precision only on CUDA — GradScaler is CUDA-specific, and MPS/CPU
-    # autocast support is inconsistent enough not to be worth it here.
     use_amp = device.type == "cuda" and train_cfg.get("mixed_precision", True)
     scaler = torch.amp.GradScaler(device="cuda", enabled=use_amp)
     if device.type == "cuda":
@@ -222,13 +198,9 @@ def run_single_fold(fold_idx: int, train_df: pd.DataFrame, val_df: pd.DataFrame,
     start_epoch = 1
     history = {"train_loss": [], "val_loss": [], f"val_{primary_metric}": []}
 
-    # --- Resume from a mid-fold crash, if there's a matching checkpoint ---
     resume_path = fold_dir / "resume_state.pt"
     if resume_path.exists():
-        # weights_only=False: this checkpoint is our own file, written by this
-        # same script, and holds plain metric/history data alongside tensors —
-        # not just a state_dict — so PyTorch's stricter weights_only=True
-        # default (safe for untrusted files) doesn't apply here.
+        # Resume files contain optimizer and training state. Load only trusted local files.
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         if checkpoint.get("config_fingerprint") == config_fingerprint:
             model.load_state_dict(checkpoint["model_state_dict"])
@@ -249,11 +221,7 @@ def run_single_fold(fold_idx: int, train_df: pd.DataFrame, val_df: pd.DataFrame,
                 f"Continuing from epoch {start_epoch}."
             )
         else:
-            logger.warning(
-                f"[fold {fold_idx}] Found resume_state.pt but the config has changed since it was "
-                f"written (architecture/image_source/freeze_backbone/image_size) — ignoring it and "
-                f"starting this fold fresh."
-            )
+            raise ValueError(f"Resume checkpoint does not match this dataset/settings in {fold_dir}; use a new output or --fresh")
 
     for epoch in range(start_epoch, train_cfg["num_epochs"] + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device, scaler, use_amp)
@@ -284,11 +252,13 @@ def run_single_fold(fold_idx: int, train_df: pd.DataFrame, val_df: pd.DataFrame,
             best_metrics_dict = val_metrics
             patience_counter = 0
 
-            # Written immediately, not deferred to the end of the fold — if
-            # training crashes on a later epoch, the best model so far is
-            # already safely on disk, not lost.
             best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             torch.save(best_state_dict, fold_dir / "best_model.pt")
+            contract = dict(version=1, input_format=run_manifest["input_format"],
+                            image_size=train_cfg["image_size"], label_map=config["dataset"]["label_map"],
+                            preprocessing="rgb_imagenet_resize_v1", training_fingerprint=config_fingerprint,
+                            checkpoint_sha256=file_hash(fold_dir / "best_model.pt"))
+            (fold_dir / "checkpoint_contract.json").write_text(json.dumps(contract, indent=2), encoding="utf-8")
             plot_confusion_matrix(y_true, y_pred, fold_dir / "confusion_matrix.png", title=f"Fold {fold_idx} — Confusion Matrix")
             plot_roc_curve(y_true, y_prob, fold_dir / "roc_curve.png", title=f"Fold {fold_idx} — ROC Curve")
             plot_pr_curve(y_true, y_prob, fold_dir / "pr_curve.png", title=f"Fold {fold_idx} — Precision-Recall Curve")
@@ -297,8 +267,6 @@ def run_single_fold(fold_idx: int, train_df: pd.DataFrame, val_df: pd.DataFrame,
         else:
             patience_counter += 1
 
-        # Resumable checkpoint, written every epoch regardless of improvement,
-        # so a crash costs at most one epoch of progress, not the whole fold.
         torch.save(
             {
                 "config_fingerprint": config_fingerprint,
@@ -323,10 +291,6 @@ def run_single_fold(fold_idx: int, train_df: pd.DataFrame, val_df: pd.DataFrame,
     plot_training_curves(history, fold_dir / "training_history.png", title=f"Fold {fold_idx} — Training History")
     logger.info(f"[fold {fold_idx}] Best epoch: {best_epoch}  {primary_metric}={best_metric_value:.4f}")
 
-    # Cheap overfitting signal: how far apart train and val loss were at the
-    # best epoch. Early stopping already protects against picking an
-    # overfit checkpoint, but a wide gap is still worth knowing about — it
-    # says the model has capacity to spare relative to how much data it has.
     if best_epoch is not None:
         best_idx = best_epoch - 1
         train_loss_at_best = history["train_loss"][best_idx]
@@ -339,19 +303,13 @@ def run_single_fold(fold_idx: int, train_df: pd.DataFrame, val_df: pd.DataFrame,
                 f"augmentation, higher weight_decay, or freeze_backbone if this is consistent across folds."
             )
 
-    # This fold is done — the resume checkpoint's job is finished; remove it
-    # so a future rerun doesn't try to resume an already-completed fold.
     resume_path.unlink(missing_ok=True)
 
     return best_metrics_dict
 
 
 def load_metadata_and_splits(config: dict, logger) -> tuple[pd.DataFrame, str, list]:
-    """Loads the metadata CSV and computes the k-fold splits exactly once.
-    Shared between training and any post-hoc analysis (e.g. threshold
-    tuning) that needs to reproduce the *exact* same folds a training run
-    used — same data, same image column, same seed, same StratifiedGroupKFold
-    call, so there's no risk of the two silently drifting apart."""
+    """Load metadata and generate the patient-grouped splits shared by training and analysis."""
     train_cfg = config["training"]
 
     if train_cfg["image_source"] == "with_roi":
@@ -369,11 +327,13 @@ def load_metadata_and_splits(config: dict, logger) -> tuple[pd.DataFrame, str, l
             f"(Stage 1, and Stage 2 if training.image_source is 'with_roi')."
         )
 
-    df = pd.read_csv(metadata_csv)
+    df = read_metadata_csv(metadata_csv)
     before = len(df)
     df = df[df[image_col].notna()].reset_index(drop=True)
     if len(df) < before:
         logger.warning(f"Dropped {before - len(df)} rows with missing '{image_col}' (e.g. unreadable images).")
+    if df["patient_id"].str.strip().eq("").any():
+        raise ValueError("Metadata contains empty patient IDs; assign them before patient-level splitting")
     logger.info(f"Loaded {len(df)} images from {metadata_csv} (image_col='{image_col}')")
     logger.info(f"Class balance: \n{df['label_text'].value_counts().to_string()}")
 
@@ -393,19 +353,25 @@ def run_kfold_cv(config: dict, logger, fresh: bool = False) -> pd.DataFrame:
     k = len(splits)
 
     fold_metrics = []
+    hashes = {}
+    # Validate every existing fold before training or overwriting any of them.
+    roi_format = input_format(df, image_col)
+    if not fresh:
+        for fold_idx, (train_idx, val_idx) in enumerate(splits, start=1):
+            expected = dict(version=1, fingerprint=training_identity(config, df.iloc[train_idx], df.iloc[val_idx], image_col, hashes),
+                            input_format=roi_format)
+            check_run_manifest(resolve_path(train_cfg["output_dir"]) / f"fold_{fold_idx}", expected)
+    output = resolve_path(train_cfg["output_dir"])
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "effective_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     for fold_idx, (train_idx, val_idx) in enumerate(splits, start=1):
         fold_dir = resolve_path(train_cfg["output_dir"]) / f"fold_{fold_idx}"
         existing_metrics_path = fold_dir / "metrics.json"
         resume_state_path = fold_dir / "resume_state.pt"
 
-        # metrics.json alone isn't proof a fold is *finished* — it's rewritten
-        # every time a new best epoch is found, including epoch 1. The only
-        # reliable "this fold's training loop actually completed" signal is
-        # metrics.json existing AND resume_state.pt having been cleaned up
-        # (that only happens at the very end of run_single_fold). If
-        # resume_state.pt is still there, this fold was interrupted
-        # mid-training and needs to resume, not be skipped.
-        fold_is_complete = existing_metrics_path.exists() and not resume_state_path.exists()
+        # Best-epoch metrics can exist before a fold finishes.
+        fold_is_complete = (existing_metrics_path.exists() and not resume_state_path.exists()
+                            and (fold_dir / "best_model.pt").is_file())
 
         if not fresh and fold_is_complete:
             with open(existing_metrics_path) as f:
@@ -417,8 +383,6 @@ def run_kfold_cv(config: dict, logger, fresh: bool = False) -> pd.DataFrame:
 
         train_df, val_df = df.iloc[train_idx], df.iloc[val_idx]
 
-        # Hard guarantee, not just trust in sklearn: no patient's images should
-        # appear on both sides of the split.
         overlap = set(train_df["patient_id"]) & set(val_df["patient_id"])
         assert not overlap, f"Patient leakage across fold {fold_idx}: {len(overlap)} patient_id(s) in both train and val"
 

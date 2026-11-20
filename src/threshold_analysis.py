@@ -1,27 +1,4 @@
-"""
-Threshold analysis — finds a better decision cutoff than the default 0.5,
-using models you've ALREADY trained. No retraining involved: this loads each
-fold's best_model.pt, runs a single inference pass over that fold's held-out
-validation images, and pools the predictions across all folds.
-
-Why pooling across folds is valid: in k-fold CV, each image is in exactly one
-fold's validation set. Concatenating every fold's validation predictions
-gives you one "out-of-fold" (OOF) prediction per image across the whole
-dataset — every image scored by a model that never saw it during training.
-That's the right set to tune a threshold against.
-
-Why this matters here specifically: the training harness's reported metrics
-use the implicit 0.5 cutoff (argmax on a 2-class softmax). Class-weighting
-the loss function encourages the model to output higher probabilities for
-the minority class, but it does NOT change where the 0.5 decision boundary
-sits — those are two different levers. If sensitivity is high and
-specificity is low (as it was here), a big part of that gap is closeable
-just by moving the cutoff, with no architecture or data changes at all.
-
-Usage:
-    python scripts/analyze_thresholds.py
-    python scripts/analyze_thresholds.py --sensitivity-floor 0.85
-"""
+"""Evaluate decision thresholds on pooled out-of-fold predictions."""
 
 from __future__ import annotations
 
@@ -29,7 +6,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
@@ -62,8 +38,6 @@ def predict_fold(fold_idx: int, val_df: pd.DataFrame, image_col: str, config: di
     val_ds = ConjunctivaDataset(val_df, image_col, transform=val_tf)
     val_loader = DataLoader(val_ds, batch_size=train_cfg["batch_size"], shuffle=False, num_workers=0)
 
-    # pretrained=False: we're about to overwrite every weight with the
-    # checkpoint anyway, no point downloading ImageNet weights first.
     model = build_model(train_cfg["architecture"], num_classes=train_cfg["num_classes"], pretrained=False)
     state_dict = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(state_dict)
@@ -154,9 +128,6 @@ def main():
     plot_threshold_sweep(sweep_df, recommended_threshold=recommended, save_path=plot_path, title="Sensitivity / Specificity / F2 vs Threshold (pooled out-of-fold)")
     logger.info(f"Wrote threshold sweep plot -> {plot_path}")
 
-    # Confusion matrix at the recommended threshold, for a direct visual
-    # comparison against the default-threshold confusion matrices already
-    # saved per fold.
     y_pred_recommended = apply_threshold(y_prob, recommended)
     cm_path = ensure_parent_dir(output_dir / "confusion_matrix_recommended_threshold.png")
     plot_confusion_matrix(

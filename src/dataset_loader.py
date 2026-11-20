@@ -1,22 +1,4 @@
-"""
-Stage 1 — Dataset loader / metadata builder for CP-AnemiC.
-
-What this does
----------------
-1. Scans the two class folders (Anemic / Non-anemic) on disk for image files.
-2. Loads the clinical metadata Excel sheet.
-3. Matches every image to its Excel row via IMAGE_ID (tolerant to case /
-   separator differences in filenames).
-4. Cross-checks the folder the image lives in against the Excel REMARK
-   column. They *should* always agree — when they don't, or when an image
-   or Excel row has no counterpart, the row is written to an issues CSV
-   instead of being silently trusted or silently dropped.
-5. Writes a single clean metadata CSV: patient_id, image_id, image_path,
-   hb_level, severity, age_months, gender, label, hospital, region, ...
-
-No duplicate / hash-based validation happens here by design for this pass —
-this stage assumes every image file is a unique, valid sample.
-"""
+"""Match CP-AnemiC image files to Excel metadata and report unmatched or conflicting rows."""
 
 from __future__ import annotations
 
@@ -81,7 +63,6 @@ def build_metadata(config: dict, logger) -> tuple[pd.DataFrame, pd.DataFrame]:
         n_non = sum(1 for r in image_records if r["folder_label"] == "Non-anemic")
         logger.info(f"Found {len(image_records)} images on disk ({n_anemic} Anemic, {n_non} Non-anemic)")
 
-    # ---- Load Excel metadata ----------------------------------------------
     excel_path = resolve_path(ds_cfg["metadata_excel_path"])
     logger.info(f"Loading Excel metadata: {excel_path}")
     excel_df = pd.read_excel(excel_path, sheet_name=ds_cfg["metadata_sheet_name"])
@@ -90,7 +71,6 @@ def build_metadata(config: dict, logger) -> tuple[pd.DataFrame, pd.DataFrame]:
     excel_df["_norm_id"] = excel_df[cols["image_id"]].astype(str).map(_normalize_id)
     excel_lookup = excel_df.set_index("_norm_id").to_dict(orient="index")
 
-    # ---- Match images -> excel rows ----------------------------------------
     matched_rows = []
     issues = []
     matched_norm_ids = set()
@@ -133,10 +113,11 @@ def build_metadata(config: dict, logger) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         matched_rows.append(
             {
-                "patient_id": excel_row[cols["image_id"]],  # see docs/README: 1 image = 1 subject assumption
+                # The workbook has no separate patient identifier.
+                "patient_id": excel_row[cols["image_id"]],
                 "image_id": excel_row[cols["image_id"]],
                 "image_path": rec["image_path"],
-                "label_text": folder_label,  # folder is treated as ground truth per current instructions
+                "label_text": folder_label,  # The folder label takes precedence over the Excel label.
                 "label": ds_cfg["label_map"][folder_label],
                 "label_source_agrees_with_excel": label_agrees,
                 "hb_level": excel_row[cols["hb_level"]],
@@ -151,7 +132,6 @@ def build_metadata(config: dict, logger) -> tuple[pd.DataFrame, pd.DataFrame]:
             }
         )
 
-    # Excel rows that never got matched to any image on disk
     unmatched_excel = excel_df[~excel_df["_norm_id"].isin(matched_norm_ids)]
     for _, row in unmatched_excel.iterrows():
         issues.append(
@@ -165,9 +145,7 @@ def build_metadata(config: dict, logger) -> tuple[pd.DataFrame, pd.DataFrame]:
             }
         )
 
-    # Fixed column list so an empty result still writes a valid, header-only
-    # CSV that downstream stages can open (pd.DataFrame([]) would instead
-    # produce a CSV with zero columns, which pandas can't read back in).
+    # Keep the CSV header even when no images match.
     metadata_columns = [
         "patient_id", "image_id", "image_path", "label_text", "label",
         "label_source_agrees_with_excel", "hb_level", "severity", "age_months",

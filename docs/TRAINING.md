@@ -153,7 +153,7 @@ model's performance, not any single fold.
    a higher learning rate).
 2. **Compare `with_roi` vs `raw` as a first experiment.** If ROI-cropped
    images perform noticeably worse than raw images, that's a signal the crop
-   thresholds need retuning (`docs/ROI_TUNING.md`) before trusting them
+   thresholds need retuning ([ROI tuning](DATA_CONTRACT.md#tuning-roi-extraction)) before trusting them
    for the real benchmarking runs.
 3. **Watch the val loss vs train loss gap** in `training_history.png` — a
    widening gap while train loss keeps dropping is classic overfitting,

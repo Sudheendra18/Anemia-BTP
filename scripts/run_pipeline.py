@@ -1,11 +1,4 @@
-"""
-Run the full Stage 1 -> Stage 2 pipeline end-to-end from one config file.
-
-    python scripts/run_pipeline.py
-    python scripts/run_pipeline.py --config configs/config.yaml
-    python scripts/run_pipeline.py --stage metadata     # only Stage 1
-    python scripts/run_pipeline.py --stage roi           # only Stage 2 (needs Stage 1 output to exist)
-"""
+"""Run metadata construction and ROI extraction from a shared configuration."""
 
 from __future__ import annotations
 
