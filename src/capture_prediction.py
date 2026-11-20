@@ -7,6 +7,8 @@ from utils import load_config, resolve_path
 from capture_provenance import pixel_hash
 
 DEFAULT_THRESHOLD = 0.5
+DEFAULT_MODEL_DIR = "outputs/experiments/efficientnet_b0_lr1e-4"
+ENSEMBLE_FOLDS = range(1, 6)
 SCORED_STATUSES = ("ok", "uncertain", "review_only")
 
 
@@ -14,13 +16,23 @@ class CapturePredictor:
     def __init__(self, options=None):
         options = options or {}
         self.enabled = options.get("enabled", True)
-        self.folder = resolve_path(options.get("model_dir", "outputs/experiments/efficientnet_b0_lr1e-4"))
+        self.folder = resolve_path(options.get("model_dir", DEFAULT_MODEL_DIR))
         self.threshold = options.get("threshold", DEFAULT_THRESHOLD)
         self.models = None
         self.input_format = options.get("legacy_input_format", "rectangular")
         self.require_confirmation = options.get("require_roi_confirmation", True)
 
+    def checkpoint_paths(self):
+        paths = [self.folder / f"fold_{i}" / "best_model.pt" for i in ENSEMBLE_FOLDS]
+        required = [self.folder / "effective_config.yaml", *paths]
+        missing = [p.relative_to(self.folder).as_posix() for p in required if not p.is_file() or p.stat().st_size == 0]
+        if missing:
+            raise FileNotFoundError(f"Missing or empty model files in {self.folder}: {', '.join(missing)}. "
+                                    "Extract the bundled checkpoints using First-time setup in README.md.")
+        return paths
+
     def _load(self):
+        paths = self.checkpoint_paths()
         import torch
         # Limit CPU contention with the live camera.
         torch.set_num_threads(min(4, torch.get_num_threads()))
@@ -32,9 +44,6 @@ class CapturePredictor:
             raise ValueError("Expected an EfficientNet-B0 ROI-trained experiment")
         if config["dataset"]["label_map"] != {"Non-anemic": 0, "Anemic": 1}:
             raise ValueError("Checkpoint label mapping does not match capture inference")
-        paths = [self.folder / f"fold_{i}" / "best_model.pt" for i in range(1, 6)]
-        if not all(path.is_file() for path in paths):
-            raise FileNotFoundError("All five EfficientNet fold checkpoints are required")
         models, provenance = [], []
         contracts = [path.with_name("checkpoint_contract.json") for path in paths]
         if any(p.exists() for p in contracts) and not all(p.exists() for p in contracts):

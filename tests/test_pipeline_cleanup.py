@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "scripts")]
 
 from dataset import build_transforms
+from image_io import read_image, write_image
 from model_contract import check_run_manifest, input_format, training_identity
 from test_capture import textured, tissue_frame
 from predict import DirectInferenceDataset, load_ensemble_models
@@ -38,16 +39,18 @@ class PipelineCleanupTests(unittest.TestCase):
 
     def test_prediction_decodes_once_and_reuses_evaluation_preprocessing(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "eye.png"
+            folder = Path(temp) / "capture_\u6d4b\u8bd5"
+            folder.mkdir()
+            path = folder / "eye.png"
             pixels = np.arange(12 * 18 * 3, dtype=np.uint8).reshape(12, 18, 3)
-            self.assertTrue(cv2.imwrite(str(path), pixels))
+            write_image(path, pixels)
             crop = pixels[2:10, 3:15]
             dataset = DirectInferenceDataset([path], image_size=16, do_extract_roi=True)
-            with patch("predict.cv2.imread", wraps=cv2.imread) as read_image, patch(
+            with patch("predict.read_image", wraps=read_image) as decode, patch(
                 "predict.extract_roi_array", return_value={"status": "ok", "roi": crop}
             ) as extract:
                 tensor, name, saved_path, status = dataset[0]
-            read_image.assert_called_once_with(str(path))
+            decode.assert_called_once_with(path)
             np.testing.assert_array_equal(extract.call_args.args[0], pixels)
             expected = build_transforms(16, train=False)(
                 Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
@@ -58,11 +61,11 @@ class PipelineCleanupTests(unittest.TestCase):
     def test_single_fold_and_ensemble_load_the_selected_checkpoints(self):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
-            for fold in (1, 2):
+            for fold in range(1, 6):
                 checkpoint = folder / f"fold_{fold}" / "best_model.pt"
                 checkpoint.parent.mkdir()
-                checkpoint.touch()
-            for fold, expected_names in ((1, ["fold_1"]), (None, ["fold_1", "fold_2"])):
+                checkpoint.write_bytes(b"test weights")
+            for fold, expected_names in ((1, ["fold_1"]), (None, [f"fold_{i}" for i in range(1, 6)])):
                 with self.subTest(fold=fold), patch(
                     "predict.build_model", side_effect=lambda *args, **kwargs: Mock()
                 ) as build, patch("predict.torch.load", return_value={}) as load:
@@ -76,8 +79,11 @@ class PipelineCleanupTests(unittest.TestCase):
                     for _, model in models:
                         model.load_state_dict.assert_called_once_with({})
                         model.eval.assert_called_once()
-            with self.assertRaisesRegex(FileNotFoundError, "Checkpoint not found"):
-                load_ensemble_models(folder, 3, "resnet50", 2, torch.device("cpu"))
+            (folder / "fold_3" / "best_model.pt").unlink()
+            for fold in (None, 3):
+                with self.assertRaisesRegex(FileNotFoundError, "fold_3"), patch("predict.build_model") as build:
+                    load_ensemble_models(folder, fold, "resnet50", 2, torch.device("cpu"))
+                build.assert_not_called()
 
     def test_rejected_ablation_resume_preserves_saved_configuration(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from model import build_model
 from dataset import build_transforms
+from capture_prediction import DEFAULT_MODEL_DIR, DEFAULT_THRESHOLD, ENSEMBLE_FOLDS
+from image_io import read_image
 from roi_extraction import extract_roi_array
 from metrics import apply_threshold
 from utils import load_config, resolve_path, setup_logging
@@ -40,7 +42,7 @@ class DirectInferenceDataset(Dataset):
 
     def __getitem__(self, idx: int):
         img_path = self.image_paths[idx]
-        img_bgr = cv2.imread(str(img_path))
+        img_bgr = read_image(img_path)
         if img_bgr is None:
             raise FileNotFoundError(f"Could not read image: {img_path}")
 
@@ -59,14 +61,11 @@ class DirectInferenceDataset(Dataset):
 
 def load_ensemble_models(model_dir: Path, fold: int | None, architecture: str, num_classes: int, device: torch.device):
     models = []
-    if fold is not None:
-        paths = [model_dir / f"fold_{fold}" / "best_model.pt"]
-        if not paths[0].is_file():
-            raise FileNotFoundError(f"Checkpoint not found: {paths[0]}")
-    else:
-        paths = sorted(path for path in model_dir.glob("fold_*/best_model.pt") if path.is_file())
-        if not paths:
-            raise FileNotFoundError(f"No fold checkpoints found under: {model_dir}")
+    folds = (fold,) if fold is not None else ENSEMBLE_FOLDS
+    paths = [model_dir / f"fold_{i}" / "best_model.pt" for i in folds]
+    missing = [str(path) for path in paths if not path.is_file() or path.stat().st_size == 0]
+    if missing:
+        raise FileNotFoundError("Missing or empty checkpoints: " + ", ".join(missing))
 
     for ckpt_path in paths:
         model = build_model(architecture, num_classes=num_classes, pretrained=False)
@@ -95,15 +94,22 @@ def main():
     parser = argparse.ArgumentParser(description="Predict anemic vs non-anemic on images without folder categorization.")
     parser.add_argument("--input", required=True, help="Path to image file OR folder of images.")
     parser.add_argument("--output", default="outputs/predictions/predictions.csv", help="Output CSV path. Default: outputs/predictions/predictions.csv")
-    parser.add_argument("--model-dir", default="outputs/experiments/efficientnet_b0_lr1e-4", help="Path to experiment folder containing fold checkpoints.")
-    parser.add_argument("--fold", type=int, default=None, help="Specific fold (1-5) to use. Default: None (5-fold ensemble).")
-    parser.add_argument("--threshold", type=float, default=0.58, help="Decision threshold for Anemic classification (default: 0.58, tuned for EfficientNet-B0).")
+    parser.add_argument("--model-dir", help="Experiment folder containing checkpoints. Defaults to capture.inference.model_dir.")
+    parser.add_argument("--fold", type=int, choices=ENSEMBLE_FOLDS, help="Use one fold. By default, all five are required.")
+    parser.add_argument("--threshold", type=float, help="Decision threshold override. Defaults to capture.inference.threshold.")
     parser.add_argument("--extract-roi", action="store_true", help="Automatically crop conjunctiva region before prediction (for full eye photos).")
     parser.add_argument("--config", default="configs/config.yaml", help="Path to config YAML for settings.")
     parser.add_argument("--batch-size", type=int, default=16, help="Inference batch size.")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    inference = config.get("capture", {}).get("inference", {})
+    try:
+        threshold = float(inference.get("threshold", DEFAULT_THRESHOLD) if args.threshold is None else args.threshold)
+    except (TypeError, ValueError):
+        parser.error("Prediction threshold must be a number between 0 and 1")
+    if not 0 < threshold < 1:
+        parser.error("Prediction threshold must be between 0 and 1")
     output_csv = resolve_path(args.output)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     logger = setup_logging(log_file=str(output_csv.parent / "inference.log"))
@@ -128,7 +134,7 @@ def main():
 
     logger.info(f"Found {len(image_paths)} image(s) to process.")
 
-    model_dir = resolve_path(args.model_dir)
+    model_dir = resolve_path(args.model_dir or inference.get("model_dir", DEFAULT_MODEL_DIR))
     effective_cfg_path = model_dir / "effective_config.yaml"
     if effective_cfg_path.exists():
         model_train_cfg = load_config(effective_cfg_path).get("training", {})
@@ -149,7 +155,10 @@ def main():
     )
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-    models = load_ensemble_models(model_dir, args.fold, arch, num_classes, device)
+    try:
+        models = load_ensemble_models(model_dir, args.fold, arch, num_classes, device)
+    except FileNotFoundError as error:
+        parser.exit(1, f"Prediction failed: {error}\n")
     logger.info(f"Loaded architecture '{arch}' ({'ensemble of ' + str(len(models)) + ' models' if args.fold is None else f'fold {args.fold}'}) from {model_dir.name}")
 
     all_names = []
@@ -175,7 +184,7 @@ def main():
             all_roi_status.extend(roi_statuses)
 
     y_prob = np.array(all_probs)
-    y_pred = apply_threshold(y_prob, args.threshold)
+    y_pred = apply_threshold(y_prob, threshold)
 
     results_df = pd.DataFrame({
         "image_name": all_names,
@@ -192,7 +201,7 @@ def main():
     n_non_anemic = int((y_pred == 0).sum())
 
     print("\n" + "=" * 65)
-    print(f"PREDICTION RESULTS (Threshold = {args.threshold:.2f})")
+    print(f"PREDICTION RESULTS (Threshold = {threshold:g})")
     print("=" * 65)
     print(f"{'Image Name':<30} {'Probability (Anemic)':<22} {'Prediction'}")
     print("-" * 65)

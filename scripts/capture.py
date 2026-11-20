@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 from dataclasses import fields
 import json
 import os
@@ -11,18 +12,24 @@ import sys
 import subprocess
 import tempfile
 
-import cv2
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from capture_storage import next_patient_id, prepare_manifest, safe_component, save_capture, available_patient_ids
-from capture_roi import choose_capture_roi, manual_capture_roi, tissue_quality
-from capture_prediction import CapturePredictor, SCORED_STATUSES
-from capture_ui import HTML, _jpeg_b64, _png_b64
-from eye_detection import OVAL_RX, OVAL_RY
-from frame_selection import CRITERIA, CaptureConfig, EyeTracker, RegionDetector, select_best_frame
-from utils import load_config, resolve_path
+_dependency_error = None
+try:
+    import cv2
+    import numpy as np
+
+    if not hasattr(cv2, "FONT_HERSHEY_SIMPLEX") or not hasattr(cv2, "IMREAD_COLOR"):
+        raise ImportError(f"Incomplete OpenCV module at {getattr(cv2, '__file__', None)}")
+    from capture_storage import next_patient_id, prepare_manifest, safe_component, save_capture, available_patient_ids
+    from capture_roi import choose_capture_roi, manual_capture_roi, tissue_quality
+    from capture_prediction import CapturePredictor, SCORED_STATUSES
+    from capture_ui import HTML, _jpeg_b64, _png_b64
+    from eye_detection import OVAL_RX, OVAL_RY, load_haar_detector
+    from frame_selection import CRITERIA, CaptureConfig, EyeTracker, RegionDetector, select_best_frame
+    from utils import load_config, resolve_path
+except ImportError as error:
+    _dependency_error = error
 
 
 def validate_details(details):
@@ -69,6 +76,19 @@ def open_output_folder(output):
         subprocess.Popen(["xdg-open", str(output)])
 
 
+@contextmanager
+def capture_chromium(parser):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        parser.exit(1, "Install requirements-capture.txt. See First-time setup in README.md.\n")
+    with sync_playwright() as playwright:
+        chromium = playwright.chromium
+        if not Path(chromium.executable_path).is_file():
+            parser.exit(1, "Chromium is missing. Run python -m playwright install chromium in the project environment.\n")
+        yield chromium
+
+
 def main():
     parser = argparse.ArgumentParser(description="Guided eye capture or best-frame selection from a video")
     parser.add_argument("--config", default="configs/config.yaml")
@@ -80,10 +100,14 @@ def main():
     parser.add_argument("--out", help="Capture folder, relative to project root")
     parser.add_argument("--stride", type=int)
     parser.add_argument("--analysis-width", type=int)
-    parser.add_argument("--video", help="Process an existing video without opening a camera or browser")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--video", help="Process an existing video without opening a camera or browser")
+    mode.add_argument("--check-setup", action="store_true", help="Check the detector, Chromium and model without opening the camera")
     parser.add_argument("--fake-camera", action="store_true")
     parser.add_argument("--eye-region", help="Fixed conjunctiva region: normalized x,y,width,height (0..1)")
     args = parser.parse_args()
+    if _dependency_error is not None:
+        parser.exit(1, f"Capture dependencies are unavailable: {_dependency_error}. See First-time setup in README.md.\n")
     config = load_config(args.config)
     settings = config.get("capture", {})
     try:
@@ -98,6 +122,32 @@ def main():
         detector = RegionDetector([float(v) for v in args.eye_region.split(",")]) if args.eye_region else None
     except ValueError as e:
         parser.error(str(e))
+    if not args.video or detector is None:
+        try:
+            load_haar_detector()
+        except RuntimeError as error:
+            parser.exit(1, f"Capture setup failed: {error}\n")
+
+    predictor = CapturePredictor(settings.get("inference"))
+    if args.check_setup:
+        with capture_chromium(parser):
+            pass
+        if predictor.enabled:
+            pixels = np.zeros((32, 32, 3), dtype=np.uint8)
+            result = predictor.predict_roi({"roi": pixels, "roi_masked": pixels})
+            if result["status"] not in SCORED_STATUSES:
+                parser.exit(1, f"Prediction setup failed: {result['reason']}\n")
+        inference = "all five model checkpoints scored on CPU" if predictor.enabled else "inference disabled"
+        print(f"Capture setup passed. OpenCV eye detector and Chromium found. Model: {inference}.")
+        return
+
+    if not args.video and predictor.enabled:
+        try:
+            predictor.checkpoint_paths()
+        except OSError as error:
+            initial_details["setup_warning"] = f"Prediction unavailable: {error}"
+            print(initial_details["setup_warning"], file=sys.stderr)
+
     output = resolve_path(args.out or settings.get("output_dir", "outputs/captures"))
     try:
         manifest = prepare_manifest(output)
@@ -109,8 +159,6 @@ def main():
     recovery_path = output / "recovery_report.json"
     if recovery_path.exists():
         print(f"Interrupted-save recovery report: {recovery_path}")
-
-    predictor = CapturePredictor(settings.get("inference"))
 
     def save(result, details=None):
         if "prediction" not in result:
@@ -139,11 +187,6 @@ def main():
                               detection_calls=result["detection_calls"],
                               elapsed_seconds=result["elapsed_seconds"]), indent=2))
         return
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        parser.exit(1, "Install requirements-capture.txt and run: python -m playwright install chromium\n")
-
     tracker = EyeTracker(cfg, detector)
     pending = {}
     with tempfile.TemporaryDirectory(prefix="conj_") as temp:
@@ -283,8 +326,12 @@ def main():
         chrome_args = ["--use-fake-ui-for-media-stream", "--start-maximized"]
         if args.fake_camera:
             chrome_args.append("--use-fake-device-for-media-stream")
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False, args=chrome_args)
+        with capture_chromium(parser) as chromium:
+            from playwright.sync_api import Error as PlaywrightError
+            try:
+                browser = chromium.launch(headless=False, args=chrome_args)
+            except PlaywrightError as error:
+                parser.exit(1, f"Cannot launch Chromium. See First-time setup in README.md.\n{error}\n")
             context = browser.new_context(permissions=["camera"], no_viewport=True)
             page = context.new_page()
             for name, callback in (("pyTrack", track), ("pyProcess", process),

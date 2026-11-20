@@ -115,14 +115,25 @@ def eyes_mediapipe(frame):
     return eyes
 
 
-def eyes_haar(frame):
-    """Fallback: OpenCV Haar eye detector; ROI = region just below each detected eye."""
+def load_haar_detector():
     global _haar
     if _haar is None:
-        _haar = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
+        try:
+            detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
+            if detector.empty():
+                raise ValueError("Could not load haarcascade_eye.xml")
+        except Exception as error:
+            raise RuntimeError(f"OpenCV eye detector is unavailable: {error}. See the OpenCV repair steps in README.md.") from error
+        _haar = detector
+    return _haar
+
+
+def eyes_haar(frame):
+    """Fallback: OpenCV Haar eye detector; ROI = region just below each detected eye."""
+    detector = load_haar_detector()
     h, w = frame.shape[:2]
     gray = cv2.equalizeHist(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-    found = _haar.detectMultiScale(gray, 1.1, 6, minSize=(max(12, w // 20), max(12, w // 20)))
+    found = detector.detectMultiScale(gray, 1.1, 6, minSize=(max(12, w // 20), max(12, w // 20)))
     if len(found) == 0:
         return []
     found = sorted(found, key=lambda r: r[2] * r[3], reverse=True)[:2]

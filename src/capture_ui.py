@@ -103,6 +103,7 @@ body[data-stage=Review] .guidehelp{display:none}
 
 .capture-footer{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:14px 16px;min-height:80px}
 .status-block{min-width:0;flex:1}#msg{font-size:13px;font-weight:600;line-height:1.6}#info{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.6;font-variant-numeric:tabular-nums}
+#setupWarning{margin-top:6px;overflow-wrap:anywhere}
 #btns{display:flex;gap:8px;align-items:center;flex-shrink:0}#go{min-width:150px}#go::before{content:'';width:12px;height:12px;border:2px solid currentColor;border-radius:50%}#keep{order:2}#cancel{color:#eea39b}
 #reviewArea{min-width:0;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(230px,.8fr);border-bottom:1px solid var(--line);background:#141517}
 #reviewArea:not(:has(#cropbox:not(.hide),#prediction:not(.hide))){display:none}
@@ -153,7 +154,7 @@ dialog::backdrop{background:#000b}dialog strong{font-size:15px;font-weight:600}d
 <div class="guidehelp"><span class="hint">Expose the lower eyelid and hold still. Drag over the tissue to set the guide manually.</span><button id="auto" class="secondary">Reset guide</button></div>
 </div>
 <div id="reviewArea"><div id="cropbox" class="hide"><div>Extracted tissue</div><img id="crop" alt="Conjunctiva extraction preview"><div class="roi-controls"><div id="cropSize"></div><div class="roi-tools"><button id="inspect" class="secondary">View original pixels</button><button id="editRoi" class="secondary">Edit tissue outline</button></div><button id="confirmRoi" class="primary">Confirm ROI &amp; predict anemia</button></div></div><div id="prediction" class="hide" role="status" aria-live="polite"></div></div></div>
-<div class="capture-footer"><div class="status-block"><div id="msg" role="status">Starting camera…</div><div id="info">Allow camera access if asked.</div></div><div id="btns"><button id="go" class="primary hide">Start capture</button><button id="cancel" class="secondary hide">Cancel capture</button><button id="disc" class="secondary hide">Retake</button><button id="keep" class="primary hide">Save capture</button><button id="retryCamera" class="secondary hide">Retry camera</button></div></div>
+<div class="capture-footer"><div class="status-block"><div id="msg" role="status">Starting camera…</div><div id="info">Allow camera access if asked.</div><div id="setupWarning" class="hint hide" role="status"></div></div><div id="btns"><button id="go" class="primary hide">Start capture</button><button id="cancel" class="secondary hide">Cancel capture</button><button id="disc" class="secondary hide">Retake</button><button id="keep" class="primary hide">Save capture</button><button id="retryCamera" class="secondary hide">Retry camera</button></div></div>
 <details id="candidateReview" class="candidate-review hide"><summary>Compare selected frames</summary><div id="cands" class="hide"></div></details>
 </section>
 <section id="saved" aria-label="Save location"><div class="savehead"><strong>Saved captures</strong><button id="openFolder" class="secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7V5h6l2 2h10v13H3V7Z"/></svg>Open folder</button></div><div id="lastSave" role="status">No captures saved this session.</div><details><summary>Storage location</summary><div id="outputPath"></div><div id="csvPath"></div></details></section>
@@ -165,6 +166,10 @@ const $=id=>document.getElementById(id);
 const DURATION=%DURATION%;
 const OUTPUT=%OUTPUT_JSON%;
 const DETAILS=%DETAILS_JSON%;
+if(DETAILS.setup_warning){
+  $('setupWarning').textContent=DETAILS.setup_warning;
+  $('setupWarning').classList.remove('hide');
+}
 function setSelect(id,value){
   const select=$(id);if(![...select.options].some(o=>o.value===String(value))) select.add(new Option(String(value),String(value)));
   select.value=String(value);

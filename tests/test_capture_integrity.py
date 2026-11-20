@@ -2,7 +2,10 @@
 import csv
 import json
 import io
+from contextlib import redirect_stderr
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,8 +16,10 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "scripts")]
 import import_captures
+import capture
 from capture_storage import FIELDS, prepare_manifest, save_capture
 from frame_selection import CaptureConfig, select_best_frame
+from image_io import read_image
 from model_contract import file_hash
 from reextract_capture_roi import repair_capture
 from test_capture import eye_detector, tissue_frame, video
@@ -30,6 +35,121 @@ def write_manifest(path, rows, encoding="utf-8"):
 
 
 class CaptureIntegrityTests(unittest.TestCase):
+    def test_capture_save_repair_and_recovery_support_unicode_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            clip = root / "test.avi"
+            output = root / "captures_\u6d4b\u8bd5"
+            video(clip, [tissue_frame()])
+            row = save_capture(select_best_frame(clip, detector=eye_detector), output, "test", "10cm", "indoor")
+            folder, manifest = Path(row["capture_dir"]), output / "dataset.csv"
+            for name in ("frame.png", "eye.png", "roi.png", "roi_debug.png"):
+                self.assertIsNotNone(read_image(folder / name), name)
+            self.assertEqual(repair_capture(folder, manifest, {})["status"], "ok")
+            write_manifest(manifest, [])
+            prepare_manifest(output)
+            with manifest.open(newline="", encoding="utf-8") as handle:
+                recovered = list(csv.DictReader(handle))
+            self.assertEqual([record["image_id"] for record in recovered], [row["image_id"]])
+
+    def test_compaction_restores_all_files_when_csv_update_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            clip, output = root / "test.avi", root / "saved"
+            video(clip, [tissue_frame()])
+            for _ in range(2):
+                row = save_capture(select_best_frame(clip, detector=eye_detector), output, "test", "10cm", "indoor")
+                folder = Path(row["capture_dir"])
+                (folder / "recording.avi").write_bytes(clip.read_bytes())
+                (folder / "candidate_glare.png").write_bytes((folder / "candidate_glare_review.png").read_bytes())
+            before = {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+            with patch("compact_captures._write_manifest", side_effect=PermissionError("CSV is locked")):
+                with self.assertRaisesRegex(PermissionError, "CSV is locked"):
+                    compact(output)
+            after = {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+            self.assertEqual(after, before)
+            self.assertEqual(compact(output)["removed_files"], 4)
+
+    def test_startup_recovers_compaction_interrupted_before_or_after_csv_commit(self):
+        child = """
+import os, sys
+sys.path.insert(0, 'scripts')
+import compact_captures as command
+write_manifest = command._write_manifest
+def interrupted(path, rows):
+    if sys.argv[2] == 'after':
+        write_manifest(path, rows)
+    os._exit(86)
+command._write_manifest = interrupted
+command.compact(sys.argv[1])
+"""
+        for moment in ("before", "after"):
+            with self.subTest(moment=moment), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                clip, output = root / "test.avi", root / "saved"
+                video(clip, [tissue_frame()])
+                row = save_capture(select_best_frame(clip, detector=eye_detector), output, "test", "10cm", "indoor")
+                folder = Path(row["capture_dir"])
+                clip_bytes = clip.read_bytes()
+                recording = folder / "recording.avi"
+                recording.write_bytes(clip_bytes)
+                manifest = output / "dataset.csv"
+                row["roi_image_path"] = (folder / "roi.png").as_posix()
+                write_manifest(manifest, [[row[field] for field in FIELDS]])
+                original_csv = manifest.read_bytes()
+                metrics = folder / "metrics.json"
+                original_metrics = metrics.read_bytes()
+
+                result = subprocess.run([sys.executable, "-c", child, str(output), moment], cwd=ROOT, timeout=45)
+                self.assertEqual(result.returncode, 86)
+                self.assertFalse(recording.exists())
+                prepare_manifest(output)
+                report = json.loads((output / "recovery_report.json").read_text(encoding="utf-8"))
+                self.assertFalse(list(output.glob(".compact_*")))
+                if moment == "before":
+                    self.assertEqual(recording.read_bytes(), clip_bytes)
+                    self.assertEqual(metrics.read_bytes(), original_metrics)
+                    self.assertEqual(manifest.read_bytes(), original_csv)
+                    self.assertEqual(report["compactions"][0]["action"], "restored original captures")
+                else:
+                    self.assertFalse(recording.exists())
+                    self.assertIn(b"roi_masked.png", manifest.read_bytes())
+                    self.assertEqual(report["compactions"][0]["action"], "kept committed compaction")
+
+    def test_copied_capture_is_reindexed_only_when_local_artifact_hashes_match(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            clip, source = root / "test.avi", root / "saved"
+            video(clip, [tissue_frame()])
+            capture = save_capture(select_best_frame(clip, detector=eye_detector), source, "test", "10cm", "indoor")
+            for altered in (False, True):
+                with self.subTest(altered=altered):
+                    output = root / f"copied_{altered}"
+                    folder = output / capture["image_id"]
+                    shutil.copytree(capture["capture_dir"], folder)
+                    if altered:
+                        (folder / "frame.png").write_bytes(b"changed")
+                    manifest = prepare_manifest(output)
+                    with manifest.open(newline="", encoding="utf-8") as handle:
+                        rows = list(csv.DictReader(handle))
+                    if altered:
+                        self.assertEqual(rows, [])
+                    else:
+                        self.assertEqual(rows[0]["capture_dir"], capture["image_id"])
+                        self.assertEqual(rows[0]["roi_image_path"], f'{capture["image_id"]}/roi_masked.png')
+
+    def test_invalid_haar_detector_fails_before_capture_storage_is_created(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stderr(io.StringIO()) as stderr:
+            output = Path(temp) / "captures"
+            with patch.object(sys, "argv", ["capture.py", "--out", str(output)]), \
+                    patch("eye_detection._haar", None), patch("eye_detection.cv2.CascadeClassifier", create=True) as classifier:
+                classifier.return_value.empty.return_value = True
+                with self.assertRaises(SystemExit) as error:
+                    capture.main()
+            self.assertEqual(error.exception.code, 1)
+            self.assertIn("OpenCV eye detector is unavailable", stderr.getvalue())
+            self.assertFalse(output.exists())
+
     def test_compaction_keeps_legacy_recording_and_syncs_invalidated_quality(self):
         with tempfile.TemporaryDirectory() as temp:
             path, output = Path(temp)/"eye.avi", Path(temp)/"saved"

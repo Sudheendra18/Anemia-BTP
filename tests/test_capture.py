@@ -20,6 +20,7 @@ from frame_selection import (
 from capture_ui import _png_b64
 from capture_storage import FIELDS, FULL_FIELDS, LEGACY_FIELDS, next_patient_id, prepare_manifest, save_capture, safe_component
 from import_captures import join_labels
+from model_contract import file_hash
 from roi_extraction import extract_roi, extract_roi_array
 from capture_roi import choose_capture_roi, extract_capture_roi, manual_capture_roi, tissue_quality
 from reextract_capture_roi import repair_capture
@@ -471,11 +472,19 @@ class CaptureTests(unittest.TestCase):
 
     def test_label_import_preserves_groups_and_rejects_failed_crops(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp)/"image.png"
-            cv2.imwrite(str(path), textured())
-            captures = pd.DataFrame([dict(image_id=f"img{i}", patient_id="001", crop_ok=True,
-                                         roi_status="ok", image_path=str(path), roi_image_path=str(path))
-                                     for i in range(2)])
+            records = []
+            for i in range(2):
+                folder = Path(temp) / f"img{i}"
+                folder.mkdir()
+                frame, roi = folder / "frame.png", folder / "roi_masked.png"
+                for path in (frame, roi):
+                    cv2.imwrite(str(path), textured())
+                record = dict(image_id=f"img{i}", patient_id="001", crop_ok=True, roi_status="ok",
+                              image_path=str(frame), roi_image_path=str(roi))
+                metrics = dict(capture=record, artifact_sha256={p.name: file_hash(p) for p in (frame, roi)})
+                (folder / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+                records.append(record)
+            captures = pd.DataFrame(records)
             labels = pd.DataFrame([dict(image_id=f"img{i}", patient_id="001", label_text="Anemic")
                                    for i in range(2)])
             joined = join_labels(captures, labels, {"Anemic": 1})
@@ -487,6 +496,10 @@ class CaptureTests(unittest.TestCase):
             captures.loc[0, "roi_status"] = "ok"
             labels.loc[0, "patient_id"] = "002"
             with self.assertRaises(ValueError):
+                join_labels(captures, labels, {"Anemic": 1})
+            labels.loc[0, "patient_id"] = "001"
+            cv2.imwrite(captures.loc[0, "roi_image_path"], np.zeros((20, 20, 3), np.uint8))
+            with self.assertRaisesRegex(ValueError, "saved hash"):
                 join_labels(captures, labels, {"Anemic": 1})
 
     def test_shortlist_rescues_roi_discarded_by_category_winners(self):

@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from image_io import write_image
 from utils import load_config, read_metadata_csv, resolve_path, setup_logging, ensure_parent_dir
 
 
@@ -224,7 +225,7 @@ def _save_debug_composite(result: dict, out_path: Path) -> None:
     roi_masked_r = _resize_h(result["roi_masked"], target_h)
 
     composite = np.hstack([orig_r, mask_r, roi_r, roi_masked_r])
-    cv2.imwrite(str(out_path), composite)
+    write_image(out_path, composite)
 
 
 def _process_one(task: dict) -> dict:

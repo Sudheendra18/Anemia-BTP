@@ -1,12 +1,36 @@
 """Join reviewed captures to explicit clinical labels for the existing trainer."""
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import argparse
+import json
 import sys
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from model_contract import file_hash
 from utils import load_config, read_metadata_csv, resolve_path
+
+
+def verify_capture(row):
+    frame, roi = Path(row.image_path), Path(row.roi_image_path)
+    folder = frame.parent.resolve()
+    metrics_path = folder / "metrics.json"
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        saved = metrics["capture"]
+        hashes = metrics["artifact_sha256"]
+        identity = (saved["image_id"], saved["patient_id"])
+        expected_names = ("frame.png", PureWindowsPath(saved["roi_image_path"]).name)
+        if not isinstance(hashes, dict):
+            raise TypeError("Invalid image inventory")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError(f"Capture {row.image_id} has no verifiable image inventory in {metrics_path}") from error
+    if (identity != (row.image_id, row.patient_id) or saved.get("crop_ok") is not True
+            or saved.get("roi_status") != "ok" or expected_names[1] not in ("roi.png", "roi_masked.png")):
+        raise ValueError(f"Capture {row.image_id} does not match approved capture metadata")
+    for path, name in zip((frame, roi), expected_names):
+        if path.name != name or path.resolve().parent != folder or hashes.get(name) != file_hash(path):
+            raise ValueError(f"Capture {row.image_id} image does not match its saved hash or path: {path}")
 
 
 def join_labels(captures, labels, label_map):
@@ -39,6 +63,8 @@ def join_labels(captures, labels, label_map):
     for column in ("image_path", "roi_image_path"):
         if not joined[column].map(lambda p: Path(str(p)).is_file()).all():
             raise ValueError(f"Missing files in {column}")
+    for row in joined.itertuples(index=False):
+        verify_capture(row)
     joined["label"] = joined.label_text.map(label_map).astype(int)
     return joined.drop(columns=["patient_id_capture"])
 
@@ -57,11 +83,11 @@ def main():
             captures["image_path"] = captures["capture_dir"].map(
                 lambda folder: (manifest.parent / str(folder) / "frame.png").as_posix()
             )
-            for column in ("roi_image_path", "prediction_input_path"):
-                if column in captures:
-                    captures[column] = captures[column].map(
-                        lambda path: (manifest.parent / str(path)).as_posix() if pd.notna(path) and path else path
-                    )
+        for column in ("image_path", "roi_image_path", "prediction_input_path"):
+            if column in captures:
+                captures[column] = captures[column].map(
+                    lambda path: (manifest.parent / str(path)).as_posix() if pd.notna(path) and path else path
+                )
         labels = pd.read_csv(resolve_path(args.labels), dtype=str, keep_default_na=False)
         result = join_labels(captures, labels, load_config(args.config)["dataset"]["label_map"])
         output = resolve_path(args.output)

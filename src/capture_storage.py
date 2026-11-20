@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import csv
 from contextlib import contextmanager
+from hashlib import sha256
+import io
 import json
 import os
 import re
 import shutil
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from uuid import uuid4
-
-import cv2
 
 from capture_ui import annotate
 from frame_selection import CRITERIA
@@ -20,6 +20,7 @@ from capture_prediction import SCORED_STATUSES
 from roi_extraction import _save_debug_composite
 from model_contract import file_hash
 from capture_provenance import prediction_input_path, read_prediction_input
+from image_io import read_image, write_image
 
 LEGACY_FIELDS = ["image_id", "patient_id", "device", "distance", "lighting", "captured_at",
           "image_path", "video_path", "eye_image_path", "roi_image_path", "roi_masked_path",
@@ -82,13 +83,19 @@ def _manifest_lock(output):
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+def _manifest_text(output, rows):
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=FIELDS)
+    writer.writeheader()
+    writer.writerows(_manifest_row(row, output) for row in rows)
+    return buffer.getvalue()
+
+
 def _write_manifest(manifest, rows):
     temporary = manifest.with_name(f".dataset_{uuid4().hex}.tmp")
     try:
         with temporary.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=FIELDS)
-            writer.writeheader()
-            writer.writerows(_manifest_row(row, manifest.parent) for row in rows)
+            f.write(_manifest_text(manifest.parent, rows))
             f.flush()
             os.fsync(f.fileno())
         os.replace(temporary, manifest)
@@ -101,7 +108,82 @@ def _write_manifest(manifest, rows):
             pass  # Cleanup must not report failure after the CSV was committed.
 
 
-def _load_manifest(manifest):
+def _write_compaction_journal(staging, manifest, rows):
+    journal = {
+        "before": file_hash(manifest),
+        "after": sha256(_manifest_text(manifest.parent, rows).encode("utf-8")).hexdigest(),
+    }
+    temporary = staging / "journal.tmp"
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(journal, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(staging / "journal.json")
+
+
+def _finish_compaction(staging):
+    # Retire the stage before deleting files so a partial cleanup cannot look like a rollback.
+    retired = staging.with_name(f".done{staging.name}")
+    if staging.resolve() != staging or retired.exists() or retired.is_symlink():
+        return staging.as_posix()
+    try:
+        staging.rename(retired)
+    except OSError:
+        return staging.as_posix()
+    try:
+        shutil.rmtree(retired)
+    except OSError:
+        return retired.as_posix()
+    return None
+
+
+def _recover_compaction(staging, manifest):
+    if staging.resolve() != staging:
+        raise ValueError(f"Unexpected compaction staging path: {staging}")
+    journal = json.loads((staging / "journal.json").read_text(encoding="utf-8"))
+    current = file_hash(manifest)
+    before, after = journal["before"], journal["after"]
+    if current == before and (before != after or not (staging / "committed").exists()):
+        originals = staging / "original"
+        backups = [p for p in originals.rglob("*") if p.is_file() or p.is_symlink()]
+        for backup in backups:
+            target = manifest.parent / backup.relative_to(originals)
+            if (backup.parent.resolve() != backup.parent or target.parent.resolve() != target.parent
+                    or len(target.relative_to(manifest.parent).parts) not in (2, 5)
+                    or not (target.name == "metrics.json" or target.name.startswith("recording.")
+                            or target.name in {f"candidate_{criterion}.png" for criterion in CRITERIA})):
+                raise ValueError(f"Unexpected compaction backup path: {backup}")
+        for backup in backups:
+            backup.replace(manifest.parent / backup.relative_to(originals))
+        action = "restored original captures"
+    elif current == after:
+        action = "kept committed compaction"
+    else:
+        raise ValueError(f"Capture CSV changed during compaction. Review the preserved files in {staging}")
+    result = {"folder": staging.as_posix(), "action": action}
+    cleanup = _finish_compaction(staging)
+    if cleanup:
+        result["cleanup_pending"] = cleanup
+    return result
+
+
+def _load_manifest(manifest, *, recovery=None):
+    if recovery is not None:
+        for retired in sorted(manifest.parent.glob(".done_compact_*")):
+            recovery["needs_review"].append({"folder": retired.as_posix(), "reason": "Compaction stage cleanup pending"})
+    for staging in sorted(manifest.parent.glob(".compact_*")):
+        if not staging.is_dir():
+            continue
+        if not (staging / "journal.json").is_file():
+            if recovery is not None:
+                recovery["needs_review"].append({"folder": staging.as_posix(), "reason": "Unjournaled compaction stage retained for review"})
+            continue
+        try:
+            result = _recover_compaction(staging, manifest.parent / "dataset.csv")
+        except (KeyError, TypeError, OSError, ValueError) as error:
+            raise ValueError(f"Cannot recover compaction at {staging}: {error}") from error
+        if recovery is not None:
+            recovery.setdefault("compactions", []).append(result)
     if not manifest.exists():
         _write_manifest(manifest, [])
         return []
@@ -240,16 +322,16 @@ def prepare_manifest(output):
     """Create the CSV or upgrade the prior capture index, preserving a backup."""
     output = Path(output).resolve()
     with _manifest_lock(output):
-        rows = _load_manifest(output / "dataset.csv")
-        report = _recover_locked(output, rows)
-        if report["recovered"] or report["needs_review"]:
+        report = {"recovered": [], "needs_review": []}
+        rows = _load_manifest(output / "dataset.csv", recovery=report)
+        _recover_locked(output, rows, report)
+        if any(report.values()):
             (output / "recovery_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return output / "dataset.csv"
 
 
-def _recover_locked(output, rows):
+def _recover_locked(output, rows, report):
     """Reindex complete published saves; never publish partial staging folders."""
-    report = {"recovered": [], "needs_review": []}
     known = {str(row["image_id"]) for row in rows}
     serials = {int(row["serial_id"]) for row in rows}
     recovered = []
@@ -264,8 +346,8 @@ def _recover_locked(output, rows):
             row = metrics["capture"]
             if not isinstance(row, dict) or not set(PREVIOUS_FIELDS).issubset(row):
                 raise ValueError("Incomplete capture metadata")
-            if Path(row["image_path"]).resolve() != (folder / "frame.png").resolve():
-                raise ValueError("Capture source path does not match its folder")
+            if folder.resolve() != folder or PureWindowsPath(row["image_path"]).name != "frame.png":
+                raise ValueError("Unexpected capture folder or frame name")
             safe_component(row["patient_id"])
             serial = int(row["serial_id"])
             if (folder.name != row["image_id"] or serial < 1 or serial in serials
@@ -281,18 +363,22 @@ def _recover_locked(output, rows):
                 required.add("eye.png")
             if row.get("roi_status") == "ok":
                 required.update(["roi.png", "roi_masked.png", "roi_mask.png", "roi_debug.png"])
+                if PureWindowsPath(row["roi_image_path"]).name not in ("roi.png", "roi_masked.png"):
+                    raise ValueError("Unexpected ROI name in capture metadata")
             if not required.issubset(hashes):
                 raise ValueError("No verified artifact inventory; manual review required")
             for name, digest in hashes.items():
                 if (Path(name).name != name or not name.endswith(".png")
-                        or file_hash(folder / name) != digest or cv2.imread(str(folder / name)) is None):
+                        or (folder / name).resolve().parent != folder
+                        or file_hash(folder / name) != digest or read_image(folder / name) is None):
                     raise ValueError("Missing or changed saved image")
             for field in ("image_path", "eye_image_path", "roi_image_path", "sharpness_path", "exposure_path", "glare_path"):
                 value = row.get(field)
                 if value:
-                    target = Path(value).resolve()
-                    if target.parent != folder.resolve() or target.name not in hashes:
+                    filename = PureWindowsPath(value).name
+                    if filename not in hashes:
                         raise ValueError("Capture paths do not match verified artifacts")
+                    row[field] = (folder / filename).as_posix()
             row["capture_dir"] = folder.as_posix()
             prediction = _verified_prediction(metrics.get("prediction", {}), folder, row["crop_ok"] is True)
             row.update(prediction_columns(prediction, folder))
@@ -309,7 +395,6 @@ def _recover_locked(output, rows):
         manifest = output / "dataset.csv"
         shutil.copy2(manifest, output / f"dataset.before_recovery_{uuid4().hex[:8]}.csv")
         _write_manifest(manifest, sorted([*rows, *recovered], key=lambda row: int(row["serial_id"])))
-    return report
 
 
 def _next_patient_id(rows):
@@ -362,11 +447,6 @@ def safe_component(value):
                          *(f"LPT{i}" for i in range(1, 10))}:
         raise ValueError("Label is a reserved Windows filename")
     return value
-
-
-def _write_image(path, image):
-    if not cv2.imwrite(str(path), image):
-        raise OSError(f"Could not save image: {path}")
 
 
 def _verified_prediction(prediction, folder, approved):
@@ -428,7 +508,7 @@ def _save_locked(result, output, device, distance, lighting, patient_id, roi_cfg
                conj_coverage=bc["coverage"], conj_score=bc["score"])
 
     def image(field, name, data):
-        _write_image(staging / name, data)
+        write_image(staging / name, data)
         row[field] = (final / name).as_posix()
 
     try:
@@ -436,24 +516,24 @@ def _save_locked(result, output, device, distance, lighting, patient_id, roi_cfg
         image("review_image_path", "review.png", annotate(bc["frame"], bc, "Selected", True))
         for name in CRITERIA:
             c = result["candidates"][name]
-            _write_image(staging / f"candidate_{name}_review.png", annotate(c["frame"], c, name))
+            write_image(staging / f"candidate_{name}_review.png", annotate(c["frame"], c, name))
             if name in ("sharpness", "exposure", "glare"):
                 row[f"{name}_path"] = (final / f"candidate_{name}_review.png").as_posix()
         eye = bc["eye"]
         if eye is not None:
             image("eye_image_path", "eye.png", eye["crop"])
             if eye.get("roi_search_mask") is not None:
-                _write_image(staging / "eye_search_mask.png", eye["roi_search_mask"])
+                write_image(staging / "eye_search_mask.png", eye["roi_search_mask"])
             row["crop_method"] = eye["method"]
             roi = result.get("_roi_result")
             if roi is None:
                 roi = extract_capture_roi(eye, roi_cfg)
             row["roi_status"] = roi["status"]
             if roi["status"] == "ok":
-                _write_image(staging / "roi.png", roi["roi"])
+                write_image(staging / "roi.png", roi["roi"])
                 image("roi_masked_path", "roi_masked.png", roi["roi_masked"])
                 row["roi_image_path"] = row["roi_masked_path"]
-                _write_image(staging / "roi_mask.png", roi["mask"])
+                write_image(staging / "roi_mask.png", roi["mask"])
                 _save_debug_composite(roi, staging / "roi_debug.png")
             row["crop_ok"] = bool(row["crop_ok"] and roi["status"] == "ok" and result.get("roi_confirmed", False))
         row["metrics_path"] = (final / "metrics.json").as_posix()

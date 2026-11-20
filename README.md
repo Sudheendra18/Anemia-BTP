@@ -36,6 +36,7 @@ the checkpoint files are extracted.
 $model = 'efficientnet_b0_lr1e-4'
 $weights = 1..5 | ForEach-Object { "$model/fold_$_/best_model.pt" }
 tar -xf "outputs/experiments/$model.zip" -C outputs/experiments $weights
+.\.venv\Scripts\python.exe scripts/capture.py --check-setup
 .\.venv\Scripts\python.exe scripts/capture.py
 ```
 
@@ -48,6 +49,9 @@ unzip -n outputs/experiments/efficientnet_b0_lr1e-4.zip 'efficientnet_b0_lr1e-4/
 
 Capture and inference run on a laptop with a webcam and use the saved model on
 the CPU. The raw training dataset and retraining are unnecessary for the demo.
+`--check-setup` checks the OpenCV eye detector and Chromium installation, then
+runs a CPU prediction on a synthetic image when inference is enabled. It does
+not open the camera or create a capture folder.
 Paths and settings are defined in [configs/config.yaml](configs/config.yaml).
 Relative configuration paths are resolved from the project root.
 

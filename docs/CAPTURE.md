@@ -6,11 +6,11 @@ continue to work.
 
 ## Start capturing
 
-From the project root, using the project Python environment:
+Follow [First-time setup](../README.md#first-time-setup) to install the
+dependencies and Chromium, extract the model checkpoints and run the setup
+check. Then launch from the project root using the project Python environment:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-capture.txt
-.\.venv\Scripts\python.exe -m playwright install chromium
 .\.venv\Scripts\python.exe scripts/capture.py
 ```
 
@@ -369,6 +369,14 @@ Cleanup deletes a candidate original only if its matching review exists. Older
 annotated candidates without a separate review are retained. Saved eye geometry
 supports ROI regeneration without a recording; very old exports lacking geometry
 must be repaired before their recording is removed.
+Compaction stages affected files until the CSV is written. If Excel blocks
+the CSV update, it restores the original capture files. Close Excel before
+retrying.
+After an interruption, startup restores the originals or finishes cleanup
+according to the CSV state. It records the result in `recovery_report.json`.
+Unjournaled staging folders from earlier versions are retained for review.
+Copied capture folders can be reindexed when their local images match the
+saved hashes.
 No diagnosis/label is inferred from capture quality. Capture segmentation uses
 eye geometry to restrict the search to the lower lid, then separates pink
 tissue from yellowish skin using Lab chroma and connected-component geometry.
@@ -426,6 +434,9 @@ unknown captures, missing files, patient-ID conflicts, missing labels, failed
 quality gates and fallback ROIs. Unlabelled captures are excluded. It preserves
 patient IDs for group-based cross-validation; frames from one patient must never
 be assigned different IDs merely to fill folds.
+The importer checks the frame and ROI against their hashes in `metrics.json`.
+Captures with missing inventories or changed images must be recovered from the
+original verified files or captured again before import.
 
 Copy `configs/config.yaml` to a separate capture-training config, set
 `roi_extraction.output_csv` to `outputs/metadata/captures_with_roi.csv`, retain
@@ -443,6 +454,9 @@ For existing trained-model inference on an individual saved capture:
 
 Review `roi_status` first. Do not pass the entire capture folder to prediction:
 it also contains annotated candidate images.
+Offline prediction uses the configured capture model and threshold by default
+and requires all five checkpoints. Use `--fold` for a single fold or
+`--threshold` to explicitly override the configured threshold.
 
 ## Verification and limitations
 

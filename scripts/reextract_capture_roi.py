@@ -15,8 +15,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from capture_roi import extract_capture_roi, manual_capture_roi, tissue_quality
-from capture_storage import SCORED_STATUSES, _load_manifest, _manifest_lock, _write_image, _write_manifest, prediction_columns
+from capture_storage import SCORED_STATUSES, _load_manifest, _manifest_lock, _write_manifest, prediction_columns
 from frame_selection import CaptureConfig, select_best_frame
+from image_io import read_image, write_image
 from model_contract import file_hash
 from roi_extraction import _save_debug_composite
 from utils import load_config, resolve_path
@@ -31,14 +32,14 @@ def repair_capture(folder, manifest, config):
             raise ValueError("Expected exactly one CSV entry for this capture folder")
         row = matches[0]
         metrics = json.loads((folder / "metrics.json").read_text(encoding="utf-8"))
-        image = cv2.imread(str(folder / "eye.png"))
+        image = read_image(folder / "eye.png")
         if image is None:
             raise ValueError("This capture has no readable saved eye crop")
         if "eye_geometry" in metrics:
             eye = dict(metrics["eye_geometry"], crop=image)
             search_path = folder / "eye_search_mask.png"
             if search_path.exists():
-                search = cv2.imread(str(search_path), cv2.IMREAD_GRAYSCALE)
+                search = read_image(search_path, cv2.IMREAD_GRAYSCALE)
                 if search is None or search.shape != image.shape[:2]:
                     raise ValueError("Saved eye search mask does not match the crop")
                 eye["roi_search_mask"] = search
@@ -97,10 +98,10 @@ def repair_capture(folder, manifest, config):
         with tempfile.TemporaryDirectory(prefix=".roi_", dir=folder) as temp:
             staged = Path(temp)
             if eye.get("roi_search_mask") is not None:
-                _write_image(staged / "eye_search_mask.png", eye["roi_search_mask"])
+                write_image(staged / "eye_search_mask.png", eye["roi_search_mask"])
             if roi["status"] == "ok":
                 for name, key in (("roi.png", "roi"), ("roi_masked.png", "roi_masked"), ("roi_mask.png", "mask")):
-                    _write_image(staged / name, roi[key])
+                    write_image(staged / name, roi[key])
                 _save_debug_composite(roi, staged / "roi_debug.png")
             if "artifact_sha256" in metrics:
                 # Refresh the images replaced by this repair. Keep the original

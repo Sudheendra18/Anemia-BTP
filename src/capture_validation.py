@@ -12,14 +12,15 @@ from capture_roi import extract_capture_roi
 from frame_selection import RegionDetector
 from capture_prediction import CapturePredictor, DEFAULT_THRESHOLD, SCORED_STATUSES
 from capture_provenance import read_prediction_input
+from image_io import read_image
 
 
 def roi_audit(rows):
     """Measure ROI overlap against reference masks aligned to the eye crops."""
     records = []
     for row in rows:
-        image = cv2.imread(str(row["eye_image_path"]))
-        truth = cv2.imread(str(row["reference_mask_path"]), cv2.IMREAD_GRAYSCALE)
+        image = read_image(row["eye_image_path"])
+        truth = read_image(row["reference_mask_path"], cv2.IMREAD_GRAYSCALE)
         if image is None or truth is None or truth.shape != image.shape[:2] or not np.any(truth):
             raise ValueError(f"Eye crop {row['image_id']} needs a nonempty, matching reference mask")
         eye = RegionDetector([0, 0, 1, 1])(image)[0]
