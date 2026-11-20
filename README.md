@@ -51,6 +51,31 @@ the CPU. The raw training dataset and retraining are unnecessary for the demo.
 Paths and settings are defined in [configs/config.yaml](configs/config.yaml).
 Relative configuration paths are resolved from the project root.
 
+### Fix a missing OpenCV eye detector
+
+If capture fails with `module 'cv2' has no attribute 'CascadeClassifier'`,
+close the app and check which OpenCV module the project environment loads.
+Run this from the project root in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import cv2; print(cv2.__file__); print(hasattr(cv2, 'CascadeClassifier'))"
+```
+
+The path should point inside `.venv` and the last line should print `True`.
+If the path points to a local `cv2.py` or `cv2` folder outside `.venv`, rename
+that file or folder so Python can load OpenCV from the environment.
+
+If the check prints `False` for the installed package or the import fails,
+reinstall the standard OpenCV package. The variants below share the `cv2`
+module, so keep only one in the project environment.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip uninstall -y opencv-python opencv-contrib-python opencv-python-headless opencv-contrib-python-headless
+.\.venv\Scripts\python.exe -m pip install --no-deps opencv-python==4.11.0.86
+```
+
+Repeat the check and restart the capture app once it prints `True`.
+
 ## Capture and score an eye image
 
 Choose your camera, record an eye clip and review the selected
